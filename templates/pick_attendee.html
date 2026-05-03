@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Select attendee - NLNOG Ride Share{% endblock %}
+{% block content %}
+<h1>Who are you?</h1>
+<p>Your order contains multiple attendees. Please select yourself:</p>
+{% for pos in positions %}
+<form method="post" action="/auth/pick">
+    <input type="hidden" name="position_id" value="{{ pos.id }}">
+    <button type="submit" class="outline">
+        {{ pos.name }}{% if pos.email %} ({{ pos.email }}){% endif %}
+    </button>
+</form>
+{% endfor %}
+{% endblock %}

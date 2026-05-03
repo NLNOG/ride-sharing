@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}{{ "Edit your ride" if ride else "Offer a ride" }} - NLNOG Ride Share{% endblock %}
+{% block content %}
+<h1>{{ "Edit your ride" if ride else "Offer a ride" }}</h1>
+<form method="post" action="{{ '/rides/%d/edit' % ride.id if ride else '/rides/offer' }}">
+    <label for="departure_location">
+        Departure location
+        <input type="text" id="departure_location" name="departure_location"
+               placeholder="e.g. Amsterdam Centraal"
+               value="{{ ride.departure_location if ride else '' }}" required>
+    </label>
+    <label for="departure_time">
+        Departure time
+        <input type="datetime-local" id="departure_time" name="departure_time"
+               value="{{ ride.departure_time.strftime('%Y-%m-%dT%H:%M') if ride else event_date ~ 'T08:00' if event_date else '' }}" required>
+    </label>
+    <label for="return_time">
+        Return time <small>(optional)</small>
+        <input type="datetime-local" id="return_time" name="return_time"
+               value="{{ ride.return_time.strftime('%Y-%m-%dT%H:%M') if ride and ride.return_time else event_date ~ 'T17:00' if (not ride and event_date) else '' }}">
+    </label>
+    <label for="seats">
+        Available seats
+        <input type="number" id="seats" name="seats" min="1" max="20"
+               value="{{ ride.seats if ride else 3 }}" required>
+    </label>
+    <label for="notes">
+        Notes <small>(optional)</small>
+        <textarea id="notes" name="notes" placeholder="e.g. meeting point, luggage space, etc.">{{ ride.notes if ride else '' }}</textarea>
+    </label>
+    <div class="grid">
+        <button type="submit">{{ "Save changes" if ride else "Offer ride" }}</button>
+        <a href="/dashboard" role="button" class="outline">Cancel</a>
+    </div>
+</form>
+{% endblock %}

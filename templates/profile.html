@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Profile - NLNOG Ride Share{% endblock %}
+{% block content %}
+<h1>Profile</h1>
+<p>Your contact details are shared with drivers and passengers of rides you participate in.</p>
+<form method="post" action="/profile">
+    <label for="name">
+        Name
+        <input type="text" id="name" value="{{ user.name }}" disabled>
+        <small>Name is synced from your Pretix ticket.</small>
+    </label>
+    <label for="phone">
+        Phone / Telegram / Signal
+        <input type="text" id="phone" name="phone" value="{{ user.phone or '' }}" placeholder="e.g. +31 6 1234 5678 or @telegram_handle">
+    </label>
+    <label for="notes">
+        Additional contact notes
+        <textarea id="notes" name="notes" placeholder="e.g. reach me on IRC as nick, or on Matrix">{{ user.notes or '' }}</textarea>
+    </label>
+    <div class="grid">
+        <button type="submit">Save</button>
+        <a href="/dashboard" role="button" class="outline">Back</a>
+    </div>
+</form>
+{% endblock %}

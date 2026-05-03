@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Ride request - NLNOG Ride Share{% endblock %}
+{% block content %}
+<h1>Ride request from {{ rr.requester.name }}</h1>
+
+<article>
+    <table class="ride-detail-table">
+        <tr>
+            <th>From</th>
+            <td>{{ rr.location }}</td>
+        </tr>
+        {% if rr.departure_time %}
+        <tr>
+            <th>Preferred time</th>
+            <td>{{ rr.departure_time.strftime('%A %d %B %Y, %H:%M') }}</td>
+        </tr>
+        {% endif %}
+        {% if rr.notes %}
+        <tr>
+            <th>Notes</th>
+            <td>{{ rr.notes }}</td>
+        </tr>
+        {% endif %}
+    </table>
+</article>
+
+{% set pending_offers = rr.offers|selectattr('status', 'equalto', 'pending')|list %}
+{% set approved_offers = rr.offers|selectattr('status', 'equalto', 'approved')|list %}
+{% set rejected_offers = rr.offers|selectattr('status', 'equalto', 'rejected')|list %}
+
+{% if pending_offers %}
+<h2>Ride offers ({{ pending_offers|length }})</h2>
+<div class="overflow-auto">
+    <table>
+        <thead>
+            <tr>
+                <th>Driver</th>
+                <th>From</th>
+                <th>Departure</th>
+                <th>Seats free</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for offer in pending_offers %}
+            <tr>
+                <td>{{ offer.ride.driver.name }}</td>
+                <td>{{ offer.ride.departure_location }}</td>
+                <td>{{ offer.ride.departure_time.strftime('%a %d %b %H:%M') }}</td>
+                <td>{{ offer.ride.seats_available }}/{{ offer.ride.seats }}</td>
+                <td>
+                    {% if is_requester %}
+                    <div class="claim-actions">
+                        <form method="post" action="/requests/{{ rr.id }}/offers/{{ offer.id }}/approve">
+                            <button type="submit" class="small-btn">Accept</button>
+                        </form>
+                        <form method="post" action="/requests/{{ rr.id }}/offers/{{ offer.id }}/reject">
+                            <button type="submit" class="outline secondary small-btn">Decline</button>
+                        </form>
+                    </div>
+                    {% else %}
+                    <span class="badge badge-pending">Pending</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% elif not approved_offers and not rejected_offers %}
+<p>No ride offers yet.</p>
+{% endif %}
+
+{% if rejected_offers and is_requester %}
+<details>
+    <summary>Declined offers ({{ rejected_offers|length }})</summary>
+    <ul>
+        {% for offer in rejected_offers %}
+        <li>{{ offer.ride.driver.name }} - {{ offer.ride.departure_location }}</li>
+        {% endfor %}
+    </ul>
+</details>
+{% endif %}
+
+<div class="grid">
+    {% if is_requester %}
+    <form method="post" action="/requests/{{ rr.id }}/delete"
+          onsubmit="return confirm('Delete this request?')">
+        <button type="submit" class="outline secondary">Delete request</button>
+    </form>
+    {% endif %}
+    <a href="/dashboard" role="button" class="outline">Back to dashboard</a>
+</div>
+{% endblock %}

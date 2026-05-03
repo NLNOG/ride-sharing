@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Request a ride - NLNOG Ride Share{% endblock %}
+{% block content %}
+<h1>Request a ride</h1>
+<form method="post" action="/requests/new">
+    <label for="location">
+        Where do you need a ride from?
+        <input type="text" id="location" name="location" placeholder="e.g. Rotterdam" required>
+    </label>
+    <label for="departure_time">
+        Preferred departure time <small>(optional)</small>
+        <input type="datetime-local" id="departure_time" name="departure_time"
+               value="{{ event_date ~ 'T08:00' if event_date else '' }}">
+    </label>
+    <label for="notes">
+        Notes <small>(optional)</small>
+        <textarea id="notes" name="notes" placeholder="e.g. flexible on time, can chip in for fuel, etc."></textarea>
+    </label>
+    <div class="grid">
+        <button type="submit">Post request</button>
+        <a href="/dashboard" role="button" class="outline">Cancel</a>
+    </div>
+</form>
+{% endblock %}

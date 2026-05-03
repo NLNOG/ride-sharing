@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}NLNOG Ride Share{% endblock %}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="nlnog-nav">
+        <div class="nav-inner">
+            <a href="/dashboard" class="brand">
+                <img src="/static/nlnog-logo.png" alt="NLNOG" class="brand-logo">
+                <span>Ride Share</span>
+            </a>
+            {% if user %}
+            <div class="nav-links">
+                <span class="nav-user">{{ user.name }}</span>
+                <a href="/profile">Profile</a>
+                <a href="/logout">Logout</a>
+            </div>
+            {% endif %}
+        </div>
+    </nav>
+    <main class="container">
+        {% for flash in flashes %}
+        <div class="flash flash-{{ flash.category }}" role="alert">
+            {{ flash.message }}
+        </div>
+        {% endfor %}
+        {% block content %}{% endblock %}
+    </main>
+    <footer class="nlnog-footer">
+        <div class="container">
+            <a href="https://nlnog.net">
+                <img src="/static/nlnog-logo.png" alt="NLNOG" class="footer-logo">
+            </a>
+            <p class="footer-tagline">Connecting the Dutch Internet Community</p>
+            <p class="footer-copyright">&copy; 2026 Stichting NLNOG. All rights reserved.</p>
+        </div>
+    </footer>
+</body>
+</html>

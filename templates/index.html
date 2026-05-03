@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}NLNOG Ride Share{% endblock %}
+{% block content %}
+<div class="hero">
+    <h1>NLNOG Ride Share</h1>
+    <p>Carpooling for NLNOG events</p>
+</div>
+<p>
+    To get started, use the ride-share link from your Pretix ticket confirmation email.
+    The link looks like:
+</p>
+<pre><code>https://ride.nlnog.net/auth/&lt;event&gt;/&lt;order-code&gt;/&lt;order-secret&gt;</code></pre>
+<p>
+    Once authenticated you can offer rides, request rides, and claim available seats.
+</p>
+{% endblock %}

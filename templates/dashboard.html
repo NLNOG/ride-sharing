@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - NLNOG Ride Share{% endblock %}
+{% block content %}
+<hgroup>
+    <h1>Dashboard</h1>
+    <p>Event: <strong>{{ event }}</strong></p>
+</hgroup>
+
+<div class="grid">
+    {% if my_ride %}
+    <a href="/rides/{{ my_ride.id }}/edit" role="button">Edit my ride</a>
+    {% else %}
+    <a href="/rides/offer" role="button">Offer a ride</a>
+    {% endif %}
+    <a href="/requests/new" role="button" class="outline">Request a ride</a>
+</div>
+
+{% if my_ride and my_ride.pending_claims %}
+<article class="flash flash-info">
+    You have <strong>{{ my_ride.pending_claims|length }}</strong> pending seat request{{ 's' if my_ride.pending_claims|length > 1 else '' }}.
+    <a href="/rides/{{ my_ride.id }}">Review</a>
+</article>
+{% endif %}
+
+<h2>Rides offered</h2>
+{% if rides %}
+<div class="overflow-auto">
+    <table>
+        <thead>
+            <tr>
+                <th>Driver</th>
+                <th>From</th>
+                <th>Departure</th>
+                <th>Return</th>
+                <th>Seats</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for ride in rides %}
+            <tr>
+                <td>{{ ride.driver.name }}</td>
+                <td>{{ ride.departure_location }}</td>
+                <td>{{ ride.departure_time.strftime('%a %d %b %H:%M') }}</td>
+                <td>{{ ride.return_time.strftime('%a %d %b %H:%M') if ride.return_time else '-' }}</td>
+                <td>
+                    {{ ride.seats_available }}/{{ ride.seats }} free
+                    {% if ride.driver_id == user.id %}
+                        <small>(yours)</small>
+                        {% if ride.pending_claims %}
+                            <span class="badge badge-pending">{{ ride.pending_claims|length }} pending</span>
+                        {% endif %}
+                    {% elif ride.id in my_claim_statuses %}
+                        {% if my_claim_statuses[ride.id] == 'pending' %}
+                            <span class="badge badge-pending">pending</span>
+                        {% elif my_claim_statuses[ride.id] == 'approved' %}
+                            <span class="badge badge-approved">joined</span>
+                        {% elif my_claim_statuses[ride.id] == 'rejected' %}
+                            <span class="badge badge-rejected">rejected</span>
+                        {% endif %}
+                    {% endif %}
+                </td>
+                <td><a href="/rides/{{ ride.id }}">Details</a></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<p>No rides offered yet. Be the first!</p>
+{% endif %}
+
+<h2>Ride requests</h2>
+{% if ride_requests %}
+<div class="overflow-auto">
+    <table>
+        <thead>
+            <tr>
+                <th>Who</th>
+                <th>From</th>
+                <th>When</th>
+                <th>Notes</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for rr in ride_requests %}
+            <tr>
+                <td><a href="/requests/{{ rr.id }}">{{ rr.requester.name }}</a></td>
+                <td>{{ rr.location }}</td>
+                <td>{{ rr.departure_time.strftime('%a %d %b %H:%M') if rr.departure_time else 'Flexible' }}</td>
+                <td>{{ rr.notes or '-' }}</td>
+                <td>
+                    {% if rr.requester_id == user.id %}
+                        {% set pending_offers = rr.offers|selectattr('status', 'equalto', 'pending')|list %}
+                        {% if pending_offers %}
+                            <a href="/requests/{{ rr.id }}">
+                                <span class="badge badge-pending">{{ pending_offers|length }} offer{{ 's' if pending_offers|length > 1 else '' }}</span>
+                            </a>
+                        {% endif %}
+                        <form method="post" action="/requests/{{ rr.id }}/delete">
+                            <button type="submit" class="outline secondary small-btn">Delete</button>
+                        </form>
+                    {% elif my_ride and rr.id not in my_offered_request_ids %}
+                        <form method="post" action="/requests/{{ rr.id }}/offer">
+                            <button type="submit" class="small-btn">Offer ride</button>
+                        </form>
+                    {% elif rr.id in my_offered_request_ids %}
+                        <small>Offered</small>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<p>No ride requests yet.</p>
+{% endif %}
+{% endblock %}

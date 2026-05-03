@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}Ride from {{ ride.departure_location }} - NLNOG Ride Share{% endblock %}
+{% block content %}
+<h1>Ride from {{ ride.departure_location }}</h1>
+
+<article>
+    <table class="ride-detail-table">
+        <tr>
+            <th>Driver</th>
+            <td>
+                {{ ride.driver.name }}
+                {% if show_contact and ride.driver.phone %}
+                    <br><small>{{ ride.driver.phone }}</small>
+                {% endif %}
+                {% if show_contact and ride.driver.notes %}
+                    <br><small>{{ ride.driver.notes }}</small>
+                {% endif %}
+            </td>
+        </tr>
+        <tr>
+            <th>Departure</th>
+            <td>{{ ride.departure_location }}</td>
+        </tr>
+        <tr>
+            <th>Departure time</th>
+            <td>{{ ride.departure_time.strftime('%A %d %B %Y, %H:%M') }}</td>
+        </tr>
+        {% if ride.return_time %}
+        <tr>
+            <th>Return time</th>
+            <td>{{ ride.return_time.strftime('%A %d %B %Y, %H:%M') }}</td>
+        </tr>
+        {% endif %}
+        <tr>
+            <th>Seats</th>
+            <td>{{ ride.seats_available }}/{{ ride.seats }} available</td>
+        </tr>
+        {% if ride.notes %}
+        <tr>
+            <th>Notes</th>
+            <td>{{ ride.notes }}</td>
+        </tr>
+        {% endif %}
+    </table>
+</article>
+
+{% if is_driver and ride.pending_claims %}
+<h2>Pending requests ({{ ride.pending_claims|length }})</h2>
+<div class="overflow-auto">
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for claim in ride.pending_claims %}
+            <tr>
+                <td>{{ claim.passenger.name }}</td>
+                <td>
+                    <div class="claim-actions">
+                        <form method="post" action="/rides/{{ ride.id }}/claims/{{ claim.id }}/approve">
+                            <button type="submit" class="small-btn">Approve</button>
+                        </form>
+                        <form method="post" action="/rides/{{ ride.id }}/claims/{{ claim.id }}/reject">
+                            <button type="submit" class="outline secondary small-btn">Reject</button>
+                        </form>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<h2>Confirmed passengers ({{ ride.approved_claims|length }}/{{ ride.seats }})</h2>
+{% if ride.approved_claims %}
+<ul>
+    {% for claim in ride.approved_claims %}
+    <li>
+        {{ claim.passenger.name }}
+        {% if show_contact and claim.passenger.phone %}
+            - {{ claim.passenger.phone }}
+        {% endif %}
+        {% if show_contact and claim.passenger.notes %}
+            <small>({{ claim.passenger.notes }})</small>
+        {% endif %}
+    </li>
+    {% endfor %}
+</ul>
+{% else %}
+<p>No confirmed passengers yet.</p>
+{% endif %}
+
+{% if my_claim and my_claim.status == 'pending' %}
+<article class="flash flash-info">
+    Your seat request is pending driver approval.
+</article>
+{% elif my_claim and my_claim.status == 'rejected' %}
+<article class="flash flash-error">
+    Your seat request was not approved.
+</article>
+{% endif %}
+
+<div class="grid">
+    {% if is_driver %}
+        <a href="/rides/{{ ride.id }}/edit" role="button">Edit ride</a>
+    {% elif my_claim and my_claim.status in ('pending', 'approved') %}
+        <form method="post" action="/rides/{{ ride.id }}/unclaim">
+            <button type="submit" class="outline">{{ 'Leave ride' if my_claim.status == 'approved' else 'Cancel request' }}</button>
+        </form>
+    {% elif not my_claim and ride.seats_available > 0 %}
+        <form method="post" action="/rides/{{ ride.id }}/claim">
+            <button type="submit">Request a seat</button>
+        </form>
+    {% elif not my_claim %}
+        <button disabled>Full</button>
+    {% endif %}
+    <a href="/dashboard" role="button" class="outline">Back to dashboard</a>
+</div>
+{% if is_driver %}
+<form method="post" action="/rides/{{ ride.id }}/delete"
+      onsubmit="return confirm('Are you sure you want to delete this ride?')">
+    <button type="submit" class="outline secondary small-btn">Delete ride</button>
+</form>
+{% endif %}
+
+{% if not show_contact and (not my_claim or my_claim.status != 'approved') %}
+<p><small>Contact details are shared between driver and confirmed passengers.</small></p>
+{% endif %}
+{% endblock %}

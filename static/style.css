@@ -1,0 +1,326 @@
+/* NLNOG Ride Share - NLNOG-branded styles on top of Pico CSS */
+
+:root {
+    --nlnog-blue: #4db8e8;
+    --nlnog-dark-blue: #233773;
+    --nlnog-light-blue: #e8f4fd;
+    --nlnog-gray: #6c757d;
+    --nlnog-dark-gray: #495057;
+    --nlnog-light-gray: #f8f9fa;
+
+    --pico-primary: var(--nlnog-dark-blue);
+    --pico-primary-hover: var(--nlnog-blue);
+    --pico-font-size: 100%;
+}
+
+/* ── Navigation ── */
+
+.nlnog-nav {
+    background-color: var(--nlnog-dark-blue);
+    padding: 0.6rem 1.5rem;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+
+.nav-inner {
+    max-width: 1200px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    text-decoration: none;
+    color: #fff;
+    font-weight: 700;
+    font-size: 1.15rem;
+}
+
+.brand:hover {
+    color: var(--nlnog-blue);
+    text-decoration: none;
+}
+
+.brand-logo {
+    height: 36px;
+    width: auto;
+}
+
+.nav-links {
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
+}
+
+.nav-links a {
+    color: rgba(255, 255, 255, 0.85);
+    text-decoration: none;
+    font-size: 0.9rem;
+    padding: 0.35rem 0.75rem;
+    border-radius: 4px;
+    transition: background-color 0.2s, color 0.2s;
+}
+
+.nav-links a:hover {
+    background-color: rgba(255, 255, 255, 0.15);
+    color: #fff;
+    text-decoration: none;
+}
+
+.nav-user {
+    color: var(--nlnog-blue);
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+/* ── Main content ── */
+
+main.container {
+    padding-top: 2rem;
+    padding-bottom: 2rem;
+}
+
+h1, h2, h3 {
+    color: var(--nlnog-dark-blue);
+}
+
+h1 {
+    border-bottom: 3px solid var(--nlnog-blue);
+    padding-bottom: 0.4rem;
+    margin-bottom: 1.5rem;
+}
+
+/* ── Flash messages ── */
+
+.flash {
+    padding: 0.75rem 1rem;
+    border-radius: 6px;
+    margin-bottom: 1.25rem;
+    font-size: 0.95rem;
+    border-left: 4px solid;
+}
+
+.flash-success {
+    background-color: #d4edda;
+    border-left-color: #28a745;
+    color: #155724;
+}
+
+.flash-error {
+    background-color: #f8d7da;
+    border-left-color: #dc3545;
+    color: #721c24;
+}
+
+.flash-info {
+    background-color: var(--nlnog-light-blue);
+    border-left-color: var(--nlnog-blue);
+    color: var(--nlnog-dark-blue);
+}
+
+/* ── Buttons ── */
+
+[role="button"], button, input[type="submit"] {
+    --pico-primary: var(--nlnog-dark-blue);
+    --pico-primary-hover: #1b2c5e;
+}
+
+[role="button"].outline, button.outline {
+    --pico-primary: var(--nlnog-dark-blue);
+    --pico-primary-hover: var(--nlnog-dark-blue);
+}
+
+button.secondary, [role="button"].secondary {
+    --pico-secondary: var(--nlnog-gray);
+    --pico-secondary-hover: var(--nlnog-dark-gray);
+}
+
+/* Make forms inside .grid stretch and their buttons fill width */
+.grid > form {
+    margin: 0;
+}
+
+.grid > form > button,
+.grid > form > [role="button"] {
+    width: 100%;
+}
+
+/* ── Small button variant (inline table actions) ── */
+
+.small-btn {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.85rem;
+    width: auto;
+    margin: 0;
+}
+
+td form {
+    margin: 0;
+}
+
+/* ── Status badges ── */
+
+.badge {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    vertical-align: middle;
+}
+
+.badge-pending {
+    background-color: #fff3cd;
+    color: #856404;
+}
+
+.badge-approved {
+    background-color: #d4edda;
+    color: #155724;
+}
+
+.badge-rejected {
+    background-color: #f8d7da;
+    color: #721c24;
+}
+
+/* ── Claim action buttons (approve/reject inline) ── */
+
+.claim-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.claim-actions form {
+    margin: 0;
+}
+
+/* ── Tables ── */
+
+.overflow-auto {
+    overflow-x: auto;
+}
+
+th {
+    background-color: var(--nlnog-light-blue);
+    color: var(--nlnog-dark-blue);
+    font-weight: 600;
+}
+
+/* ── Cards / articles ── */
+
+article {
+    border-top: 3px solid var(--nlnog-blue);
+}
+
+/* ── Attendee picker ── */
+
+form + form {
+    margin-top: 0.5rem;
+}
+
+/* ── Hero section (index page) ── */
+
+.hero {
+    background: linear-gradient(135deg, var(--nlnog-dark-blue) 0%, var(--nlnog-blue) 100%);
+    color: #fff;
+    padding: 3rem 2rem;
+    border-radius: 8px;
+    margin-bottom: 2rem;
+    text-align: center;
+}
+
+.hero h1 {
+    color: #fff;
+    border-bottom: none;
+    font-size: 2.2rem;
+    margin-bottom: 0.5rem;
+}
+
+.hero p {
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 1.15rem;
+    margin-bottom: 0;
+}
+
+/* ── Footer ── */
+
+.nlnog-footer {
+    background-color: var(--nlnog-dark-gray);
+    margin-top: 3rem;
+    padding: 1.5rem 0;
+    text-align: center;
+}
+
+.footer-logo {
+    height: 28px;
+    width: auto;
+    opacity: 0.7;
+    transition: opacity 0.2s;
+}
+
+.footer-logo:hover {
+    opacity: 1;
+}
+
+.footer-tagline {
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 0.9rem;
+    margin: 0.75rem 0 0.25rem;
+}
+
+.footer-copyright {
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 0.8rem;
+    margin: 0;
+}
+
+/* ── Ride detail ── */
+
+.ride-detail-table th {
+    width: 140px;
+    white-space: nowrap;
+}
+
+/* ── Responsive ── */
+
+@media (max-width: 768px) {
+    .nlnog-nav {
+        padding: 0.5rem 1rem;
+    }
+
+    .nav-inner {
+        flex-wrap: wrap;
+    }
+
+    .brand-logo {
+        height: 28px;
+    }
+
+    .brand span {
+        font-size: 1rem;
+    }
+
+    .nav-links {
+        gap: 0.75rem;
+    }
+
+    .nav-user {
+        display: none;
+    }
+
+    .hero {
+        padding: 2rem 1rem;
+    }
+
+    .hero h1 {
+        font-size: 1.75rem;
+    }
+}
