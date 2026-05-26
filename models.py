@@ -22,6 +22,7 @@ class Attendee(Base):
     id = Column(Integer, primary_key=True)
     pretix_event = Column(String, nullable=False)
     pretix_order_code = Column(String, nullable=False)
+    pretix_order_secret = Column(String, nullable=False, default="")
     pretix_position_id = Column(Integer, nullable=False)
     name = Column(String, nullable=False)
     email = Column(String, default="")

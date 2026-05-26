@@ -5,6 +5,7 @@ import os
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from urllib.parse import quote
 
 log = logging.getLogger(__name__)
 
@@ -62,115 +63,119 @@ Log in with your Pretix ticket link to manage your rides.
         except Exception:
             log.exception("Failed to send email to %s: %s", to, subject)
 
-    def ride_url(self, ride_id: int) -> str:
-        return f"{self.base_url}/rides/{ride_id}"
+    def auth_url(self, attendee, path: str) -> str:
+        """Build a per-attendee auth-redirect URL.
 
-    def request_url(self, request_id: int) -> str:
-        return f"{self.base_url}/requests/{request_id}"
+        Recipients land logged in and then bounce to `path`. Falls back to a
+        plain URL when we don't have the order secret stored yet (attendees
+        created before the secret column existed).
+        """
+        if not getattr(attendee, "pretix_order_secret", ""):
+            return f"{self.base_url}{path}"
+        url = (
+            f"{self.base_url}/auth/"
+            f"{attendee.pretix_event}/{attendee.pretix_order_code}/{attendee.pretix_order_secret}"
+        )
+        if path:
+            url += f"?redirect={quote(path, safe='')}"
+        return url
 
     # --- Convenience methods for each notification type ---
 
-    def notify_seat_requested(self, driver_email: str, driver_name: str,
-                              passenger_name: str, ride):
+    def notify_seat_requested(self, driver, passenger_name: str, ride):
         self.send(
-            driver_email,
+            driver.email,
             f"New seat request from {passenger_name}",
-            f"Hi {driver_name},\n\n"
+            f"Hi {driver.name},\n\n"
             f"{passenger_name} has requested a seat on your ride from "
             f"{ride.departure_location}.\n\n"
             f"Please log in to approve or decline:\n"
-            f"{self.ride_url(ride.id)}\n",
+            f"{self.auth_url(driver, f'/rides/{ride.id}')}\n",
         )
 
-    def notify_seat_approved(self, passenger_email: str, passenger_name: str,
-                             driver_name: str, ride):
+    def notify_seat_approved(self, passenger, driver_name: str, ride):
         self.send(
-            passenger_email,
+            passenger.email,
             f"Your seat on {driver_name}'s ride is confirmed!",
-            f"Hi {passenger_name},\n\n"
+            f"Hi {passenger.name},\n\n"
             f"{driver_name} has approved your seat on the ride from "
             f"{ride.departure_location}.\n\n"
             f"View ride details and contact info:\n"
-            f"{self.ride_url(ride.id)}\n",
+            f"{self.auth_url(passenger, f'/rides/{ride.id}')}\n",
         )
 
-    def notify_seat_rejected(self, passenger_email: str, passenger_name: str,
-                             driver_name: str, ride):
+    def notify_seat_rejected(self, passenger, driver_name: str, ride):
         self.send(
-            passenger_email,
+            passenger.email,
             f"Seat request update for {driver_name}'s ride",
-            f"Hi {passenger_name},\n\n"
+            f"Hi {passenger.name},\n\n"
             f"Unfortunately, {driver_name} was unable to approve your seat "
             f"request for the ride from {ride.departure_location}.\n\n"
-            f"You can browse other available rides on the dashboard.\n",
+            f"You can browse other available rides on the dashboard:\n"
+            f"{self.auth_url(passenger, '/dashboard')}\n",
         )
 
-    def notify_passenger_left(self, driver_email: str, driver_name: str,
-                              passenger_name: str, ride):
+    def notify_passenger_left(self, driver, passenger_name: str, ride):
         self.send(
-            driver_email,
+            driver.email,
             f"{passenger_name} left your ride",
-            f"Hi {driver_name},\n\n"
+            f"Hi {driver.name},\n\n"
             f"{passenger_name} has left your ride from "
             f"{ride.departure_location}. You now have "
             f"{ride.seats_available} seat(s) available.\n\n"
             f"View your ride:\n"
-            f"{self.ride_url(ride.id)}\n",
+            f"{self.auth_url(driver, f'/rides/{ride.id}')}\n",
         )
 
-    def notify_ride_cancelled(self, passenger_email: str, passenger_name: str,
-                              driver_name: str, departure_location: str):
+    def notify_ride_cancelled(self, passenger, driver_name: str, departure_location: str):
         self.send(
-            passenger_email,
+            passenger.email,
             f"Ride from {departure_location} has been cancelled",
-            f"Hi {passenger_name},\n\n"
+            f"Hi {passenger.name},\n\n"
             f"The ride from {departure_location} offered by "
             f"{driver_name} has been cancelled.\n\n"
-            f"You can browse other available rides on the dashboard.\n",
+            f"You can browse other available rides on the dashboard:\n"
+            f"{self.auth_url(passenger, '/dashboard')}\n",
         )
 
-    def notify_ride_edited(self, passenger_email: str, passenger_name: str,
-                           driver_name: str, ride):
+    def notify_ride_edited(self, passenger, driver_name: str, ride):
         self.send(
-            passenger_email,
+            passenger.email,
             f"Ride details updated for {ride.departure_location}",
-            f"Hi {passenger_name},\n\n"
+            f"Hi {passenger.name},\n\n"
             f"{driver_name} has updated the details of the ride from "
             f"{ride.departure_location}.\n\n"
             f"View the updated details:\n"
-            f"{self.ride_url(ride.id)}\n",
+            f"{self.auth_url(passenger, f'/rides/{ride.id}')}\n",
         )
 
-    def notify_ride_offered(self, requester_email: str, requester_name: str,
-                            driver_name: str, ride, request_id: int):
+    def notify_ride_offered(self, requester, driver_name: str, ride, request_id: int):
         self.send(
-            requester_email,
+            requester.email,
             f"{driver_name} offered you a ride from {ride.departure_location}",
-            f"Hi {requester_name},\n\n"
+            f"Hi {requester.name},\n\n"
             f"{driver_name} has offered you a seat on their ride from "
             f"{ride.departure_location}.\n\n"
             f"Review the offer:\n"
-            f"{self.request_url(request_id)}\n",
+            f"{self.auth_url(requester, f'/requests/{request_id}')}\n",
         )
 
-    def notify_offer_accepted(self, driver_email: str, driver_name: str,
-                              requester_name: str, ride):
+    def notify_offer_accepted(self, driver, requester_name: str, ride):
         self.send(
-            driver_email,
+            driver.email,
             f"{requester_name} accepted your ride offer!",
-            f"Hi {driver_name},\n\n"
+            f"Hi {driver.name},\n\n"
             f"{requester_name} has accepted your offer for the ride from "
             f"{ride.departure_location}.\n\n"
             f"View ride details and contact info:\n"
-            f"{self.ride_url(ride.id)}\n",
+            f"{self.auth_url(driver, f'/rides/{ride.id}')}\n",
         )
 
-    def notify_offer_declined(self, driver_email: str, driver_name: str,
-                              requester_name: str, ride):
+    def notify_offer_declined(self, driver, requester_name: str, ride):
         self.send(
-            driver_email,
+            driver.email,
             f"{requester_name} declined your ride offer",
-            f"Hi {driver_name},\n\n"
+            f"Hi {driver.name},\n\n"
             f"{requester_name} has declined your offer for the ride from "
             f"{ride.departure_location}.\n",
         )

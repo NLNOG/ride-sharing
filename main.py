@@ -51,6 +51,14 @@ with engine.connect() as conn:
         ))
         conn.commit()
 
+    result = conn.execute(text("PRAGMA table_info(attendees)"))
+    columns = [row[1] for row in result]
+    if "pretix_order_secret" not in columns:
+        conn.execute(text(
+            "ALTER TABLE attendees ADD COLUMN pretix_order_secret VARCHAR NOT NULL DEFAULT ''"
+        ))
+        conn.commit()
+
 SessionLocal = sessionmaker(bind=engine)
 
 pretix = PretixClient(
@@ -86,7 +94,8 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> Attende
 # ---------------------------------------------------------------------------
 
 def _get_or_create_attendee(
-    db: Session, event: str, code: str, position_id: int, name: str, email: str,
+    db: Session, event: str, code: str, secret: str,
+    position_id: int, name: str, email: str,
 ) -> Attendee:
     attendee = (
         db.query(Attendee)
@@ -101,6 +110,7 @@ def _get_or_create_attendee(
         attendee = Attendee(
             pretix_event=event,
             pretix_order_code=code,
+            pretix_order_secret=secret or "",
             pretix_position_id=position_id,
             name=name or "Attendee",
             email=email or "",
@@ -109,6 +119,8 @@ def _get_or_create_attendee(
     else:
         attendee.name = name or attendee.name
         attendee.email = email or attendee.email
+        if secret:
+            attendee.pretix_order_secret = secret
     db.commit()
     db.refresh(attendee)
     return attendee
@@ -119,6 +131,15 @@ def _resolve_attendee_fields(position: dict, order: dict) -> tuple[str, str]:
     name = position.get("attendee_name") or "Attendee"
     email = position.get("attendee_email") or order.get("email") or ""
     return name, email
+
+
+def _safe_redirect_path(path: str) -> str:
+    """Accept only same-origin absolute paths so ?redirect= can't open-redirect."""
+    if not path:
+        return ""
+    if path.startswith("/") and not path.startswith("//"):
+        return path
+    return ""
 
 
 def _flash(request: Request, message: str, category: str = "info"):
@@ -152,7 +173,11 @@ def index(request: Request, db: Session = Depends(get_db)):
 
 
 @app.get("/auth/{event}/{code}/{secret}")
-async def auth(event: str, code: str, secret: str, request: Request, db: Session = Depends(get_db)):
+async def auth(
+    event: str, code: str, secret: str, request: Request,
+    redirect: str = "",
+    db: Session = Depends(get_db),
+):
     order = await pretix.verify_order(event, code, secret)
     if not order:
         _flash(request, "Invalid or expired ticket link.", "error")
@@ -168,13 +193,17 @@ async def auth(event: str, code: str, secret: str, request: Request, db: Session
     if event_data and event_data.get("date_from"):
         event_date = event_data["date_from"][:10]
 
+    target = _safe_redirect_path(redirect)
+
     if len(positions) == 1:
         name, email = _resolve_attendee_fields(positions[0], order)
-        attendee = _get_or_create_attendee(db, event, code, positions[0]["id"], name, email)
+        attendee = _get_or_create_attendee(
+            db, event, code, secret, positions[0]["id"], name, email,
+        )
         request.session["attendee_id"] = attendee.id
         request.session["event"] = event
         request.session["event_date"] = event_date
-        return RedirectResponse(url="/dashboard", status_code=303)
+        return RedirectResponse(url=target or "/dashboard", status_code=303)
 
     pending_positions = []
     for p in positions:
@@ -184,7 +213,9 @@ async def auth(event: str, code: str, secret: str, request: Request, db: Session
     request.session["_pending"] = {
         "event": event,
         "code": code,
+        "secret": secret,
         "event_date": event_date,
+        "redirect": target,
         "positions": pending_positions,
     }
     return RedirectResponse(url="/auth/pick", status_code=303)
@@ -209,13 +240,15 @@ def auth_pick_submit(request: Request, position_id: int = Form(...), db: Session
         raise HTTPException(status_code=400, detail="Invalid position")
 
     attendee = _get_or_create_attendee(
-        db, pending["event"], pending["code"], pos["id"], pos["name"], pos["email"],
+        db, pending["event"], pending["code"], pending.get("secret", ""),
+        pos["id"], pos["name"], pos["email"],
     )
     request.session["attendee_id"] = attendee.id
     request.session["event"] = pending["event"]
     request.session["event_date"] = pending.get("event_date", "")
+    target = pending.get("redirect") or "/dashboard"
     request.session.pop("_pending", None)
-    return RedirectResponse(url="/dashboard", status_code=303)
+    return RedirectResponse(url=target, status_code=303)
 
 
 @app.get("/logout")
@@ -374,8 +407,7 @@ def edit_ride_submit(
     for claim in ride.approved_claims:
         background_tasks.add_task(
             email.notify_ride_edited,
-            claim.passenger.email, claim.passenger.name,
-            user.name, ride,
+            claim.passenger, user.name, ride,
         )
 
     _flash(request, "Ride updated!", "success")
@@ -444,8 +476,7 @@ def claim_ride(
 
     background_tasks.add_task(
         email.notify_seat_requested,
-        ride.driver.email, ride.driver.name,
-        user.name, ride,
+        ride.driver, user.name, ride,
     )
 
     _flash(request, "Seat requested! The driver will be notified.", "success")
@@ -479,8 +510,7 @@ def approve_claim(
 
     background_tasks.add_task(
         email.notify_seat_approved,
-        claim.passenger.email, claim.passenger.name,
-        user.name, ride,
+        claim.passenger, user.name, ride,
     )
 
     _flash(request, f"{claim.passenger.name} approved!", "success")
@@ -510,8 +540,7 @@ def reject_claim(
 
     background_tasks.add_task(
         email.notify_seat_rejected,
-        claim.passenger.email, claim.passenger.name,
-        user.name, ride,
+        claim.passenger, user.name, ride,
     )
 
     _flash(request, f"{claim.passenger.name} rejected.", "success")
@@ -542,8 +571,7 @@ def unclaim_ride(
         if was_approved:
             background_tasks.add_task(
                 email.notify_passenger_left,
-                ride.driver.email, ride.driver.name,
-                user.name, ride,
+                ride.driver, user.name, ride,
             )
             _flash(request, "You left the ride.", "success")
         else:
@@ -573,8 +601,7 @@ def delete_ride(
         if claim.status in ("pending", "approved"):
             background_tasks.add_task(
                 email.notify_ride_cancelled,
-                claim.passenger.email, claim.passenger.name,
-                driver_name, departure_location,
+                claim.passenger, driver_name, departure_location,
             )
 
     db.delete(ride)
@@ -681,8 +708,7 @@ def offer_ride_to_request(
 
     background_tasks.add_task(
         email.notify_ride_offered,
-        rr.requester.email, rr.requester.name,
-        user.name, my_ride, request_id,
+        rr.requester, user.name, my_ride, request_id,
     )
 
     _flash(request, "Offer sent! The requester will be notified.", "success")
@@ -730,8 +756,7 @@ def approve_offer(
             other.status = "rejected"
             background_tasks.add_task(
                 email.notify_offer_declined,
-                other.ride.driver.email, other.ride.driver.name,
-                user.name, other.ride,
+                other.ride.driver, user.name, other.ride,
             )
 
     db.delete(rr)
@@ -739,8 +764,7 @@ def approve_offer(
 
     background_tasks.add_task(
         email.notify_offer_accepted,
-        ride.driver.email, ride.driver.name,
-        user.name, ride,
+        ride.driver, user.name, ride,
     )
 
     _flash(request, "Offer accepted! You're on the ride.", "success")
@@ -770,8 +794,7 @@ def reject_offer(
 
     background_tasks.add_task(
         email.notify_offer_declined,
-        offer.ride.driver.email, offer.ride.driver.name,
-        user.name, offer.ride,
+        offer.ride.driver, user.name, offer.ride,
     )
 
     _flash(request, "Offer declined.", "success")
