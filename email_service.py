@@ -21,8 +21,11 @@ class EmailService:
         self.enabled = bool(self.host)
 
     def send(self, to: str, subject: str, body: str):
-        if not self.enabled or not to:
-            log.info("Email skipped (SMTP not configured or no recipient): %s", subject)
+        if not self.enabled:
+            log.warning("Email skipped (SMTP_HOST not set): %s", subject)
+            return
+        if not to:
+            log.warning("Email skipped (empty recipient address): %s", subject)
             return
 
         msg = MIMEMultipart("alternative")

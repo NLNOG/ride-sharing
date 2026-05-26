@@ -85,13 +85,15 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> Attende
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _get_or_create_attendee(db: Session, event: str, code: str, position: dict) -> Attendee:
+def _get_or_create_attendee(
+    db: Session, event: str, code: str, position_id: int, name: str, email: str,
+) -> Attendee:
     attendee = (
         db.query(Attendee)
         .filter_by(
             pretix_event=event,
             pretix_order_code=code,
-            pretix_position_id=position["id"],
+            pretix_position_id=position_id,
         )
         .first()
     )
@@ -99,17 +101,24 @@ def _get_or_create_attendee(db: Session, event: str, code: str, position: dict) 
         attendee = Attendee(
             pretix_event=event,
             pretix_order_code=code,
-            pretix_position_id=position["id"],
-            name=position.get("attendee_name") or "Attendee",
-            email=position.get("attendee_email") or "",
+            pretix_position_id=position_id,
+            name=name or "Attendee",
+            email=email or "",
         )
         db.add(attendee)
     else:
-        attendee.name = position.get("attendee_name") or attendee.name
-        attendee.email = position.get("attendee_email") or attendee.email
+        attendee.name = name or attendee.name
+        attendee.email = email or attendee.email
     db.commit()
     db.refresh(attendee)
     return attendee
+
+
+def _resolve_attendee_fields(position: dict, order: dict) -> tuple[str, str]:
+    """Return (name, email) for a position, falling back to order-level email."""
+    name = position.get("attendee_name") or "Attendee"
+    email = position.get("attendee_email") or order.get("email") or ""
+    return name, email
 
 
 def _flash(request: Request, message: str, category: str = "info"):
@@ -160,24 +169,23 @@ async def auth(event: str, code: str, secret: str, request: Request, db: Session
         event_date = event_data["date_from"][:10]
 
     if len(positions) == 1:
-        attendee = _get_or_create_attendee(db, event, code, positions[0])
+        name, email = _resolve_attendee_fields(positions[0], order)
+        attendee = _get_or_create_attendee(db, event, code, positions[0]["id"], name, email)
         request.session["attendee_id"] = attendee.id
         request.session["event"] = event
         request.session["event_date"] = event_date
         return RedirectResponse(url="/dashboard", status_code=303)
 
+    pending_positions = []
+    for p in positions:
+        name, email = _resolve_attendee_fields(p, order)
+        pending_positions.append({"id": p["id"], "name": name, "email": email})
+
     request.session["_pending"] = {
         "event": event,
         "code": code,
         "event_date": event_date,
-        "positions": [
-            {
-                "id": p["id"],
-                "name": p.get("attendee_name") or "Attendee",
-                "email": p.get("attendee_email") or "",
-            }
-            for p in positions
-        ],
+        "positions": pending_positions,
     }
     return RedirectResponse(url="/auth/pick", status_code=303)
 
@@ -200,7 +208,9 @@ def auth_pick_submit(request: Request, position_id: int = Form(...), db: Session
     if not pos:
         raise HTTPException(status_code=400, detail="Invalid position")
 
-    attendee = _get_or_create_attendee(db, pending["event"], pending["code"], pos)
+    attendee = _get_or_create_attendee(
+        db, pending["event"], pending["code"], pos["id"], pos["name"], pos["email"],
+    )
     request.session["attendee_id"] = attendee.id
     request.session["event"] = pending["event"]
     request.session["event_date"] = pending.get("event_date", "")
