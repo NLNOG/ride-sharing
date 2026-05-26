@@ -156,7 +156,12 @@ def _tpl(request: Request, name: str, ctx: dict, db: Session | None = None) -> H
     if db:
         user = get_current_user(request, db)
     event_date = request.session.get("event_date", "")
-    ctx.update({"user": user, "flashes": _get_flashes(request), "event_date": event_date})
+    ctx.update({
+        "user": user,
+        "flashes": _get_flashes(request),
+        "event_date": event_date,
+        "base_url": email.base_url,
+    })
     return templates.TemplateResponse(request, name, ctx)
 
 
