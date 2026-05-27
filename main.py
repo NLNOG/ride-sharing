@@ -4,6 +4,7 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -175,6 +176,29 @@ def index(request: Request, db: Session = Depends(get_db)):
     if user:
         return RedirectResponse(url="/dashboard", status_code=303)
     return _tpl(request, "index.html", {}, db)
+
+
+@app.get("/auth")
+def auth_by_order_url(request: Request, order: str = ""):
+    """Accept a full Pretix order URL via ?order=... and redirect to the
+    structured auth route.
+
+    Pretix order URLs look like:
+        https://pretix.eu/<organizer>/<event>/order/<code>/<secret>/[open/<hash>/]
+    """
+    if not order:
+        _flash(request, "Paste your Pretix order link to log in.", "error")
+        return RedirectResponse(url="/", status_code=303)
+
+    parsed = urlparse(order)
+    parts = [p for p in parsed.path.split("/") if p]
+    # parts: [organizer, event, "order", code, secret, ...]
+    if len(parts) < 5 or parts[2] != "order":
+        _flash(request, "That doesn't look like a valid Pretix order link.", "error")
+        return RedirectResponse(url="/", status_code=303)
+
+    event, code, secret = parts[1], parts[3], parts[4]
+    return RedirectResponse(url=f"/auth/{event}/{code}/{secret}", status_code=303)
 
 
 @app.get("/auth/{event}/{code}/{secret}")

@@ -6,10 +6,26 @@
     <p>Carpooling for NLNOG events</p>
 </div>
 <p>
-    To get started, use the ride-share link from your Pretix ticket confirmation email.
-    The link looks like:
+    To get started, paste your Pretix order link below. You can find it in the
+    ticket confirmation email, it looks like
+    <code>https://pretix.eu/nlnog/&lt;event&gt;/order/&lt;code&gt;/&lt;secret&gt;/</code>.
 </p>
-<pre><code>{{ base_url }}/auth/&lt;event&gt;/&lt;order-code&gt;/&lt;order-secret&gt;</code></pre>
+<form action="/auth" method="get">
+    <label for="order">Pretix order link</label>
+    <input
+        type="url"
+        id="order"
+        name="order"
+        placeholder="https://pretix.eu/nlnog/.../order/.../.../"
+        required
+        autofocus
+    >
+    <button type="submit">Log in</button>
+</form>
+<p>
+    You can also use the direct ride-share link from the same email:
+    <code>{{ base_url }}/auth/&lt;event&gt;/&lt;order-code&gt;/&lt;order-secret&gt;</code>.
+</p>
 <p>
     Once authenticated you can offer rides, request rides, and claim available seats.
 </p>
