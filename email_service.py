@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import html as html_lib
 import logging
 import os
+import re
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from urllib.parse import quote
 
 log = logging.getLogger(__name__)
+
+_URL_RE = re.compile(r"https?://[^\s<]+")
 
 
 class EmailService:
@@ -38,7 +42,9 @@ class EmailService:
         msg.attach(MIMEText(body, "plain"))
 
         # Simple HTML version
-        html_body = body.replace("\n", "<br>\n")
+        escaped = html_lib.escape(body)
+        linked = _URL_RE.sub(lambda m: f'<a href="{m.group(0)}">{m.group(0)}</a>', escaped)
+        html_body = linked.replace("\n", "<br>\n")
         html = f"""\
 <html>
 <body style="font-family: sans-serif; color: #333; max-width: 600px;">
