@@ -51,6 +51,7 @@ All configuration is via environment variables (or a `.env` file):
 | `SMTP_PASSWORD` | SMTP password |
 | `SMTP_FROM` | From address for emails |
 | `SMTP_STARTTLS` | Use STARTTLS (default: `true`) |
+| `CLEANUP_INTERVAL_SECONDS` | How often to purge data for finished events (default: `86400`) |
 
 ## Running tests
 

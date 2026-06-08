@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -20,6 +22,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
+from cleanup import cleanup_expired_events
 from email_service import EmailService
 from models import Attendee, Base, Ride, RideClaim, RideOffer, RideRequest
 from pretix import PretixClient
@@ -28,7 +31,42 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent
 
-app = FastAPI(title="NLNOG Ride Share")
+# How often the retention cleanup runs (seconds); defaults to once a day.
+CLEANUP_INTERVAL_SECONDS = int(os.getenv("CLEANUP_INTERVAL_SECONDS", str(24 * 60 * 60)))
+
+
+async def _cleanup_loop():
+    """Periodically purge data for events that ended over the retention window ago."""
+    while True:
+        try:
+            db = SessionLocal()
+            try:
+                purged = await cleanup_expired_events(db, pretix)
+                if purged:
+                    logging.getLogger("cleanup").info(
+                        "purged %d expired event(s): %s", len(purged), ", ".join(purged),
+                    )
+            finally:
+                db.close()
+        except Exception:
+            logging.getLogger("cleanup").exception("event cleanup failed")
+        await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(_cleanup_loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(title="NLNOG Ride Share", lifespan=lifespan)
 app.add_middleware(
     SessionMiddleware,
     secret_key=os.getenv("SECRET_KEY", "change-me"),

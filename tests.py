@@ -5,13 +5,14 @@ import asyncio
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 from httpx import ASGITransport, AsyncClient, Cookies
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from cleanup import cleanup_expired_events
 from models import Attendee, Base, Ride, RideClaim, RideOffer, RideRequest
 
 # Use a test database
@@ -98,6 +99,79 @@ def test_models():
     assert db.query(RideClaim).count() == 0
     assert db.query(RideOffer).count() == 0
     ok("cascade delete cleans up claims and offers")
+
+    db.close()
+
+
+# ---------------------------------------------------------------------------
+# Retention cleanup tests
+# ---------------------------------------------------------------------------
+
+def _seed_event(db, event: str):
+    """Create a full set of data (attendees, ride, request, claim, offer) for an event."""
+    driver = Attendee(pretix_event=event, pretix_order_code="D", pretix_position_id=1, name="Driver")
+    passenger = Attendee(pretix_event=event, pretix_order_code="P", pretix_position_id=1, name="Passenger")
+    db.add_all([driver, passenger])
+    db.commit()
+
+    ride = Ride(event=event, driver_id=driver.id, departure_location="AMS",
+                departure_time=datetime(2026, 9, 15, 8, 0), seats=3)
+    rr = RideRequest(event=event, requester_id=passenger.id, location="Rotterdam")
+    db.add_all([ride, rr])
+    db.commit()
+
+    db.add(RideClaim(ride_id=ride.id, passenger_id=passenger.id, status="approved"))
+    db.add(RideOffer(ride_id=ride.id, request_id=rr.id, status="pending"))
+    db.commit()
+
+
+async def test_cleanup():
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+
+    _seed_event(db, "past_ev")
+    _seed_event(db, "future_ev")
+
+    now = datetime.now(timezone.utc)
+    # past_ev ended well beyond the 4-day window; future_ev hasn't ended yet.
+    event_dates = {
+        "past_ev": {"date_to": (now - timedelta(days=10)).isoformat()},
+        "future_ev": {"date_to": (now + timedelta(days=10)).isoformat()},
+    }
+
+    fake_pretix = type("P", (), {})()
+    fake_pretix.get_event = AsyncMock(side_effect=lambda slug: event_dates.get(slug))
+
+    purged = await cleanup_expired_events(db, fake_pretix)
+
+    assert purged == ["past_ev"]
+    ok("only the expired event is purged")
+
+    # All past_ev data is gone...
+    assert db.query(Attendee).filter_by(pretix_event="past_ev").count() == 0
+    assert db.query(Ride).filter_by(event="past_ev").count() == 0
+    assert db.query(RideRequest).filter_by(event="past_ev").count() == 0
+    ok("expired event attendees, rides, requests deleted")
+
+    # ...including the claims and offers that cascade from its rides/requests.
+    assert db.query(RideClaim).count() == 1  # only future_ev's claim remains
+    assert db.query(RideOffer).count() == 1  # only future_ev's offer remains
+    ok("expired event claims and offers cascade-deleted")
+
+    # future_ev is untouched.
+    assert db.query(Attendee).filter_by(pretix_event="future_ev").count() == 2
+    assert db.query(Ride).filter_by(event="future_ev").count() == 1
+    assert db.query(RideRequest).filter_by(event="future_ev").count() == 1
+    ok("not-yet-expired event is preserved")
+
+    # An event Pretix can't resolve is left alone, never deleted.
+    _seed_event(db, "unknown_ev")
+    event_dates.clear()
+    purged = await cleanup_expired_events(db, fake_pretix)
+    assert purged == []
+    assert db.query(Attendee).filter_by(pretix_event="unknown_ev").count() == 2
+    ok("events with no Pretix data are never purged")
 
     db.close()
 
@@ -354,6 +428,9 @@ async def test_app():
 if __name__ == "__main__":
     print("\n=== Model Tests ===")
     test_models()
+
+    print("\n=== Cleanup Tests ===")
+    asyncio.run(test_cleanup())
 
     print("\n=== Integration Tests ===")
     asyncio.run(test_app())
