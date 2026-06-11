@@ -18,14 +18,18 @@
             </td>
         </tr>
         <tr>
-            <th>Departure</th>
+            <th>Direction</th>
+            <td>{{ {'round_trip': 'Round trip', 'to_event': 'To the event only', 'from_event': 'From the event only'}[ride.direction] }}</td>
+        </tr>
+        <tr>
+            <th>{{ 'Destination' if ride.direction == 'from_event' else 'Departure' }}</th>
             <td>{{ ride.departure_location }}</td>
         </tr>
         <tr>
             <th>Departure time</th>
             <td>{{ ride.departure_time.strftime('%A %d %B %Y, %H:%M') }}</td>
         </tr>
-        {% if ride.return_time %}
+        {% if ride.direction == 'round_trip' and ride.return_time %}
         <tr>
             <th>Return time</th>
             <td>{{ ride.return_time.strftime('%A %d %B %Y, %H:%M') }}</td>

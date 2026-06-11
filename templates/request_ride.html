@@ -3,8 +3,16 @@
 {% block content %}
 <h1>Request a ride</h1>
 <form method="post" action="/requests/new">
+    <label for="direction">
+        Direction
+        <select id="direction" name="direction">
+            <option value="to_event" selected>To the event</option>
+            <option value="from_event">From the event</option>
+            <option value="round_trip">Both ways</option>
+        </select>
+    </label>
     <label for="location">
-        Where do you need a ride from?
+        Which location? <small>(where you travel from or to)</small>
         <input type="text" id="location" name="location" placeholder="e.g. Rotterdam" required>
     </label>
     <label for="departure_time">
@@ -15,6 +23,17 @@
     <label for="notes">
         Notes <small>(optional)</small>
         <textarea id="notes" name="notes" placeholder="e.g. flexible on time, can chip in for fuel, etc."></textarea>
+    </label>
+    <label for="contact_phone">
+        Your contact: phone / Telegram / Signal
+        <input type="text" id="contact_phone" name="contact_phone"
+               placeholder="e.g. +31 6 1234 5678 or @telegram_handle"
+               value="{{ user.phone or '' }}" required>
+        <small>Shared with the driver once you are matched.</small>
+    </label>
+    <label for="contact_notes">
+        Additional contact notes <small>(optional)</small>
+        <textarea id="contact_notes" name="contact_notes" placeholder="e.g. reach me on IRC as nick, or on Matrix">{{ user.notes or '' }}</textarea>
     </label>
     <div class="grid">
         <button type="submit">Post request</button>

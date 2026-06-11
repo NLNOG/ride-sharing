@@ -41,6 +41,10 @@ class Attendee(Base):
     ride_requests = relationship("RideRequest", back_populates="requester")
     ride_claims = relationship("RideClaim", back_populates="passenger")
 
+    @property
+    def has_contact(self) -> bool:
+        return bool((self.phone or "").strip() or (self.notes or "").strip())
+
 
 class Ride(Base):
     __tablename__ = "rides"
@@ -51,6 +55,7 @@ class Ride(Base):
     departure_location = Column(String, nullable=False)
     departure_time = Column(DateTime, nullable=False)
     return_time = Column(DateTime, nullable=True)
+    direction = Column(String, nullable=False, default="round_trip")
     seats = Column(Integer, nullable=False, default=1)
     notes = Column(Text, default="")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
@@ -84,6 +89,7 @@ class RideRequest(Base):
     requester_id = Column(Integer, ForeignKey("attendees.id"), nullable=False)
     location = Column(String, nullable=False)
     departure_time = Column(DateTime, nullable=True)
+    direction = Column(String, nullable=False, default="to_event")
     notes = Column(Text, default="")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 

@@ -29,7 +29,8 @@
         <thead>
             <tr>
                 <th>Driver</th>
-                <th>From</th>
+                <th>Direction</th>
+                <th>Location</th>
                 <th>Departure</th>
                 <th>Return</th>
                 <th>Seats</th>
@@ -40,6 +41,7 @@
             {% for ride in rides %}
             <tr>
                 <td>{{ ride.driver.name }}</td>
+                <td>{{ {'round_trip': 'round trip', 'to_event': 'to event', 'from_event': 'from event'}[ride.direction] }}</td>
                 <td>{{ ride.departure_location }}</td>
                 <td>{{ ride.departure_time.strftime('%a %d %b %H:%M') }}</td>
                 <td>{{ ride.return_time.strftime('%a %d %b %H:%M') if ride.return_time else '-' }}</td>
@@ -77,7 +79,8 @@
         <thead>
             <tr>
                 <th>Who</th>
-                <th>From</th>
+                <th>Direction</th>
+                <th>Location</th>
                 <th>When</th>
                 <th>Notes</th>
                 <th></th>
@@ -87,6 +90,7 @@
             {% for rr in ride_requests %}
             <tr>
                 <td><a href="/requests/{{ rr.id }}">{{ rr.requester.name }}</a></td>
+                <td>{{ {'round_trip': 'both ways', 'to_event': 'to event', 'from_event': 'from event'}[rr.direction] }}</td>
                 <td>{{ rr.location }}</td>
                 <td>{{ rr.departure_time.strftime('%a %d %b %H:%M') if rr.departure_time else 'Flexible' }}</td>
                 <td>{{ rr.notes or '-' }}</td>
@@ -101,12 +105,12 @@
                         <form method="post" action="/requests/{{ rr.id }}/delete">
                             <button type="submit" class="outline secondary small-btn">Delete</button>
                         </form>
-                    {% elif my_ride and rr.id not in my_offered_request_ids %}
+                    {% elif rr.id in my_offered_request_ids %}
+                        <small>Offered</small>
+                    {% elif my_ride and rr.id in compatible_request_ids %}
                         <form method="post" action="/requests/{{ rr.id }}/offer">
                             <button type="submit" class="small-btn">Offer ride</button>
                         </form>
-                    {% elif rr.id in my_offered_request_ids %}
-                        <small>Offered</small>
                     {% endif %}
                 </td>
             </tr>

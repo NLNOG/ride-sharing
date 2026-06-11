@@ -56,6 +56,20 @@ def test_models():
     db.add(ride)
     db.commit()
 
+    # Direction defaults
+    assert ride.direction == "round_trip"
+    ok("ride direction defaults to round_trip")
+
+    # Contact presence
+    assert a1.has_contact is False
+    a1.phone = "+31600000000"
+    assert a1.has_contact is True
+    a1.phone = ""
+    a1.notes = "find me on IRC"
+    assert a1.has_contact is True
+    a1.notes = ""
+    ok("attendee has_contact reflects phone/notes")
+
     # No claims
     assert ride.seats_available == 3
     ok("seats_available with no claims")
@@ -86,6 +100,8 @@ def test_models():
     rr = RideRequest(event="ev", requester_id=a2.id, location="Rotterdam")
     db.add(rr)
     db.commit()
+    assert rr.direction == "to_event"
+    ok("request direction defaults to to_event")
     offer = RideOffer(ride_id=ride.id, request_id=rr.id, status="pending")
     db.add(offer)
     db.commit()
@@ -101,6 +117,18 @@ def test_models():
     ok("cascade delete cleans up claims and offers")
 
     db.close()
+
+
+def test_directions():
+    from main import directions_compatible
+
+    assert directions_compatible("round_trip", "to_event") is True
+    assert directions_compatible("round_trip", "from_event") is True
+    assert directions_compatible("to_event", "to_event") is True
+    assert directions_compatible("from_event", "from_event") is True
+    assert directions_compatible("to_event", "from_event") is False
+    assert directions_compatible("from_event", "to_event") is False
+    ok("directions_compatible matches one-way rides correctly")
 
 
 # ---------------------------------------------------------------------------
@@ -234,13 +262,28 @@ async def test_app():
         assert r.status_code == 200 and "Alice Driver" in r.text
         ok("alice dashboard")
 
-        # -- Alice offers a ride --
+        # -- Offering without contact info is blocked --
         r = await alice.post("/rides/offer", data={
             "departure_location": "Amsterdam",
             "departure_time": "2026-09-15T08:00",
             "return_time": "2026-09-15T17:00",
             "seats": "3",
             "notes": "test ride",
+        }, follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/rides/offer"
+        r = await alice.get("/dashboard")
+        assert "Amsterdam" not in r.text
+        ok("offer without contact info is blocked")
+
+        # -- Alice offers a ride (with contact) --
+        r = await alice.post("/rides/offer", data={
+            "departure_location": "Amsterdam",
+            "departure_time": "2026-09-15T08:00",
+            "return_time": "2026-09-15T17:00",
+            "direction": "round_trip",
+            "seats": "3",
+            "notes": "test ride",
+            "contact_phone": "+31600000001",
         }, follow_redirects=False)
         assert r.status_code == 303
         ok("alice offers ride")
@@ -253,6 +296,25 @@ async def test_app():
         r = await alice.get("/rides/1")
         assert r.status_code == 200 and "Edit ride" in r.text
         ok("alice ride detail as driver")
+
+        # -- Claiming without contact info is blocked --
+        r = await bob.post("/rides/1/claim", follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/profile"
+        r = await bob.get("/rides/1")
+        assert "pending driver approval" not in r.text
+        ok("claim without contact info is blocked")
+
+        # -- Profile save with no contact info is rejected --
+        r = await bob.post("/profile", data={"phone": "", "notes": ""}, follow_redirects=False)
+        assert r.status_code == 303
+        r = await bob.get("/profile")
+        assert "reach you" in r.text
+        ok("empty profile save is rejected")
+
+        # -- Bob sets his contact info --
+        r = await bob.post("/profile", data={"phone": "+31600000002", "notes": ""}, follow_redirects=False)
+        assert r.status_code == 303
+        ok("bob sets contact info")
 
         # -- Bob requests a seat (pending) --
         r = await bob.post("/rides/1/claim", follow_redirects=False)
@@ -326,7 +388,9 @@ async def test_app():
         r = await bob.post("/requests/new", data={
             "location": "Rotterdam",
             "departure_time": "2026-09-15T07:00",
+            "direction": "to_event",
             "notes": "need a lift",
+            "contact_phone": "+31600000002",
         }, follow_redirects=False)
         assert r.status_code == 303
         ok("bob posts ride request")
@@ -377,8 +441,10 @@ async def test_app():
             "departure_location": "Amsterdam Centraal",
             "departure_time": "2026-09-15T08:30",
             "return_time": "2026-09-15T17:30",
+            "direction": "round_trip",
             "seats": "4",
             "notes": "updated",
+            "contact_phone": "+31612345678",
         }, follow_redirects=False)
         assert r.status_code == 303
         ok("edit ride")
@@ -405,6 +471,48 @@ async def test_app():
         r = await alice.get("/dashboard")
         assert "Amsterdam" not in r.text
         ok("ride removed from dashboard")
+
+        # -- One-way rides and direction compatibility --
+        # Alice offers a one-way ride leaving the event
+        r = await alice.post("/rides/offer", data={
+            "departure_location": "Utrecht",
+            "departure_time": "2026-09-15T18:00",
+            "return_time": "2026-09-15T20:00",
+            "direction": "from_event",
+            "seats": "2",
+            "contact_phone": "+31612345678",
+        }, follow_redirects=False)
+        assert r.status_code == 303
+        ok("alice offers one-way ride")
+
+        r = await alice.get("/dashboard")
+        ride_id = re.search(r"/rides/(\d+)", r.text).group(1)
+        r = await alice.get(f"/rides/{ride_id}")
+        assert "From the event only" in r.text
+        assert "Return time" not in r.text
+        ok("one-way ride hides return time")
+
+        # Bob posts a request to the event (incompatible with a from-event ride)
+        r = await bob.post("/requests/new", data={
+            "location": "Den Haag",
+            "direction": "to_event",
+            "contact_phone": "+31600000002",
+        }, follow_redirects=False)
+        assert r.status_code == 303
+        r = await bob.get("/dashboard")
+        req_id = re.search(r"/requests/(\d+)", r.text).group(1)
+        ok("bob posts a to-event request")
+
+        # Alice's from-event ride can't offer to a to-event request
+        r = await alice.get("/dashboard")
+        assert "Offer ride" not in r.text
+        ok("incompatible request hides offer button")
+
+        r = await alice.post(f"/requests/{req_id}/offer", follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/dashboard"
+        r = await bob.get(f"/requests/{req_id}")
+        assert "No ride offers yet" in r.text
+        ok("incompatible direction offer is blocked")
 
         # -- Logout --
         r = await alice.get("/logout", follow_redirects=False)
@@ -434,6 +542,9 @@ if __name__ == "__main__":
 
     print("\n=== Integration Tests ===")
     asyncio.run(test_app())
+
+    print("\n=== Direction Tests ===")
+    test_directions()
 
     print(f"\n{'=' * 40}")
     print(f"  {passed} passed, {failed} failed")

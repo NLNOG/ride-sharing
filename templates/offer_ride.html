@@ -3,6 +3,14 @@
 {% block content %}
 <h1>{{ "Edit your ride" if ride else "Offer a ride" }}</h1>
 <form method="post" action="{{ '/rides/%d/edit' % ride.id if ride else '/rides/offer' }}">
+    <label for="direction">
+        Direction
+        <select id="direction" name="direction">
+            <option value="round_trip" {{ 'selected' if not ride or ride.direction == 'round_trip' else '' }}>Round trip</option>
+            <option value="to_event" {{ 'selected' if ride and ride.direction == 'to_event' else '' }}>To the event only</option>
+            <option value="from_event" {{ 'selected' if ride and ride.direction == 'from_event' else '' }}>From the event only</option>
+        </select>
+    </label>
     <label for="departure_location">
         Departure location
         <input type="text" id="departure_location" name="departure_location"
@@ -15,7 +23,7 @@
                value="{{ ride.departure_time.strftime('%Y-%m-%dT%H:%M') if ride else event_date ~ 'T08:00' if event_date else '' }}" required>
     </label>
     <label for="return_time">
-        Return time <small>(optional)</small>
+        Return time <small>(round trips only)</small>
         <input type="datetime-local" id="return_time" name="return_time"
                value="{{ ride.return_time.strftime('%Y-%m-%dT%H:%M') if ride and ride.return_time else event_date ~ 'T17:00' if (not ride and event_date) else '' }}">
     </label>
@@ -27,6 +35,17 @@
     <label for="notes">
         Notes <small>(optional)</small>
         <textarea id="notes" name="notes" placeholder="e.g. meeting point, luggage space, etc.">{{ ride.notes if ride else '' }}</textarea>
+    </label>
+    <label for="contact_phone">
+        Your contact: phone / Telegram / Signal
+        <input type="text" id="contact_phone" name="contact_phone"
+               placeholder="e.g. +31 6 1234 5678 or @telegram_handle"
+               value="{{ user.phone or '' }}" required>
+        <small>Shared with passengers once you confirm them.</small>
+    </label>
+    <label for="contact_notes">
+        Additional contact notes <small>(optional)</small>
+        <textarea id="contact_notes" name="contact_notes" placeholder="e.g. reach me on IRC as nick, or on Matrix">{{ user.notes or '' }}</textarea>
     </label>
     <div class="grid">
         <button type="submit">{{ "Save changes" if ride else "Offer ride" }}</button>
