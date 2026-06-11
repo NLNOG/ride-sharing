@@ -6,7 +6,11 @@
 <article>
     <table class="ride-detail-table">
         <tr>
-            <th>From</th>
+            <th>Direction</th>
+            <td>{{ {'round_trip': 'Both ways', 'to_event': 'To the event', 'from_event': 'From the event'}[rr.direction] }}</td>
+        </tr>
+        <tr>
+            <th>Location</th>
             <td>{{ rr.location }}</td>
         </tr>
         {% if rr.departure_time %}

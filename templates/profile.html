@@ -11,7 +11,8 @@
     </label>
     <label for="phone">
         Phone / Telegram / Signal
-        <input type="text" id="phone" name="phone" value="{{ user.phone or '' }}" placeholder="e.g. +31 6 1234 5678 or @telegram_handle">
+        <input type="text" id="phone" name="phone" value="{{ user.phone or '' }}" placeholder="e.g. +31 6 1234 5678 or @telegram_handle" required>
+        <small>At least one contact method (this or the notes below) is required.</small>
     </label>
     <label for="notes">
         Additional contact notes

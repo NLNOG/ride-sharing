@@ -98,6 +98,22 @@ with engine.connect() as conn:
         ))
         conn.commit()
 
+    result = conn.execute(text("PRAGMA table_info(rides)"))
+    columns = [row[1] for row in result]
+    if "direction" not in columns:
+        conn.execute(text(
+            "ALTER TABLE rides ADD COLUMN direction VARCHAR NOT NULL DEFAULT 'round_trip'"
+        ))
+        conn.commit()
+
+    result = conn.execute(text("PRAGMA table_info(ride_requests)"))
+    columns = [row[1] for row in result]
+    if "direction" not in columns:
+        conn.execute(text(
+            "ALTER TABLE ride_requests ADD COLUMN direction VARCHAR NOT NULL DEFAULT 'to_event'"
+        ))
+        conn.commit()
+
 SessionLocal = sessionmaker(bind=engine)
 
 pretix = PretixClient(
@@ -170,6 +186,17 @@ def _resolve_attendee_fields(position: dict, order: dict) -> tuple[str, str]:
     name = position.get("attendee_name") or "Attendee"
     email = position.get("attendee_email") or order.get("email") or ""
     return name, email
+
+
+RIDE_DIRECTIONS = ("round_trip", "to_event", "from_event")
+REQUEST_DIRECTIONS = ("to_event", "from_event", "round_trip")
+
+
+def directions_compatible(ride_dir: str, req_dir: str) -> bool:
+    """A round-trip ride can serve any request; a one-way ride must match the request."""
+    if ride_dir == "round_trip":
+        return True
+    return ride_dir == req_dir
 
 
 def _safe_redirect_path(path: str) -> str:
@@ -355,12 +382,17 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
 
     my_ride = db.query(Ride).filter_by(event=event, driver_id=user.id).first()
 
-    # IDs of requests this user has already offered to
+    # IDs of requests this user has already offered to, and the ones their ride can serve
     my_offered_request_ids = set()
+    compatible_request_ids = set()
     if my_ride:
         my_offered_request_ids = {
             o.request_id
             for o in db.query(RideOffer).filter_by(ride_id=my_ride.id).all()
+        }
+        compatible_request_ids = {
+            rr.id for rr in ride_requests
+            if directions_compatible(my_ride.direction, rr.direction)
         }
 
     return _tpl(request, "dashboard.html", {
@@ -370,6 +402,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         "my_claim_statuses": my_claim_statuses,
         "my_ride": my_ride,
         "my_offered_request_ids": my_offered_request_ids,
+        "compatible_request_ids": compatible_request_ids,
     }, db)
 
 
@@ -397,8 +430,11 @@ def offer_ride_submit(
     departure_location: str = Form(...),
     departure_time: str = Form(...),
     return_time: str = Form(""),
+    direction: str = Form("round_trip"),
     seats: int = Form(1),
     notes: str = Form(""),
+    contact_phone: str = Form(""),
+    contact_notes: str = Form(""),
     db: Session = Depends(get_db),
 ):
     user = get_current_user(request, db)
@@ -411,12 +447,22 @@ def offer_ride_submit(
         _flash(request, "You already have a ride for this event. You can edit it instead.", "error")
         return RedirectResponse(url=f"/rides/{existing.id}/edit", status_code=303)
 
+    if not (contact_phone.strip() or contact_notes.strip()):
+        _flash(request, "Please provide a phone number or contact note so passengers can reach you.", "error")
+        return RedirectResponse(url="/rides/offer", status_code=303)
+
+    if direction not in RIDE_DIRECTIONS:
+        direction = "round_trip"
+
+    user.phone = contact_phone
+    user.notes = contact_notes
     ride = Ride(
         event=event,
         driver_id=user.id,
         departure_location=departure_location,
         departure_time=datetime.fromisoformat(departure_time),
-        return_time=datetime.fromisoformat(return_time) if return_time else None,
+        return_time=datetime.fromisoformat(return_time) if return_time and direction == "round_trip" else None,
+        direction=direction,
         seats=seats,
         notes=notes,
     )
@@ -447,8 +493,11 @@ def edit_ride_submit(
     departure_location: str = Form(...),
     departure_time: str = Form(...),
     return_time: str = Form(""),
+    direction: str = Form("round_trip"),
     seats: int = Form(1),
     notes: str = Form(""),
+    contact_phone: str = Form(""),
+    contact_notes: str = Form(""),
     db: Session = Depends(get_db),
 ):
     user = get_current_user(request, db)
@@ -463,9 +512,19 @@ def edit_ride_submit(
         _flash(request, f"Can't reduce to {seats} seats - {len(ride.approved_claims)} already confirmed.", "error")
         return RedirectResponse(url=f"/rides/{ride_id}/edit", status_code=303)
 
+    if not (contact_phone.strip() or contact_notes.strip()):
+        _flash(request, "Please provide a phone number or contact note so passengers can reach you.", "error")
+        return RedirectResponse(url=f"/rides/{ride_id}/edit", status_code=303)
+
+    if direction not in RIDE_DIRECTIONS:
+        direction = "round_trip"
+
+    user.phone = contact_phone
+    user.notes = contact_notes
     ride.departure_location = departure_location
     ride.departure_time = datetime.fromisoformat(departure_time)
-    ride.return_time = datetime.fromisoformat(return_time) if return_time else None
+    ride.return_time = datetime.fromisoformat(return_time) if return_time and direction == "round_trip" else None
+    ride.direction = direction
     ride.seats = seats
     ride.notes = notes
     db.commit()
@@ -519,6 +578,10 @@ def claim_ride(
     ride = db.get(Ride, ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
+
+    if not user.has_contact:
+        _flash(request, "Add a phone number or contact note to your profile before joining a ride.", "error")
+        return RedirectResponse(url="/profile", status_code=303)
 
     if ride.driver_id == user.id:
         _flash(request, "You can't claim your own ride.", "error")
@@ -694,18 +757,31 @@ def request_ride_submit(
     request: Request,
     location: str = Form(...),
     departure_time: str = Form(""),
+    direction: str = Form("to_event"),
     notes: str = Form(""),
+    contact_phone: str = Form(""),
+    contact_notes: str = Form(""),
     db: Session = Depends(get_db),
 ):
     user = get_current_user(request, db)
     if not user:
         return RedirectResponse(url="/", status_code=303)
 
+    if not (contact_phone.strip() or contact_notes.strip()):
+        _flash(request, "Please provide a phone number or contact note so drivers can reach you.", "error")
+        return RedirectResponse(url="/requests/new", status_code=303)
+
+    if direction not in REQUEST_DIRECTIONS:
+        direction = "to_event"
+
+    user.phone = contact_phone
+    user.notes = contact_notes
     rr = RideRequest(
         event=request.session.get("event"),
         requester_id=user.id,
         location=location,
         departure_time=datetime.fromisoformat(departure_time) if departure_time else None,
+        direction=direction,
         notes=notes,
     )
     db.add(rr)
@@ -750,10 +826,18 @@ def offer_ride_to_request(
         _flash(request, "You can't offer a ride to yourself.", "error")
         return RedirectResponse(url="/dashboard", status_code=303)
 
+    if not user.has_contact:
+        _flash(request, "Add a phone number or contact note to your profile before offering a ride.", "error")
+        return RedirectResponse(url="/profile", status_code=303)
+
     event = request.session.get("event")
     my_ride = db.query(Ride).filter_by(event=event, driver_id=user.id).first()
     if not my_ride:
         _flash(request, "You need to offer a ride first.", "error")
+        return RedirectResponse(url="/dashboard", status_code=303)
+
+    if not directions_compatible(my_ride.direction, rr.direction):
+        _flash(request, "Your ride's direction doesn't match this request.", "error")
         return RedirectResponse(url="/dashboard", status_code=303)
 
     if my_ride.seats_available <= 0:
@@ -906,6 +990,10 @@ def profile_update(
     user = get_current_user(request, db)
     if not user:
         return RedirectResponse(url="/", status_code=303)
+
+    if not (phone.strip() or notes.strip()):
+        _flash(request, "Please provide a phone number or contact note so others can reach you.", "error")
+        return RedirectResponse(url="/profile", status_code=303)
 
     user.phone = phone
     user.notes = notes
