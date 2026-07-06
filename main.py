@@ -188,6 +188,20 @@ def _resolve_attendee_fields(position: dict, order: dict) -> tuple[str, str]:
     return name, email
 
 
+def _attendee_positions(positions: list[dict], admission_item_ids: set[int] | None) -> list[dict]:
+    """Keep only positions that represent an actual attendee.
+
+    Only admission products correspond to a person attending the event;
+    non-admission products on the same order (add-ons, donations, merchandise)
+    must not be shown as extra attendees. When the admission items couldn't be
+    resolved (``admission_item_ids is None``) we keep every position so a real
+    attendee is never accidentally hidden.
+    """
+    if admission_item_ids is None:
+        return positions
+    return [p for p in positions if p.get("item") in admission_item_ids]
+
+
 RIDE_DIRECTIONS = ("round_trip", "to_event", "from_event")
 REQUEST_DIRECTIONS = ("to_event", "from_event", "round_trip")
 
@@ -277,7 +291,8 @@ async def auth(
         _flash(request, "Invalid or expired ticket link.", "error")
         return RedirectResponse(url="/", status_code=303)
 
-    positions = order.get("positions", [])
+    admission_item_ids = await pretix.get_admission_item_ids(event)
+    positions = _attendee_positions(order.get("positions", []), admission_item_ids)
     if not positions:
         _flash(request, "No attendees found on this order.", "error")
         return RedirectResponse(url="/", status_code=303)
