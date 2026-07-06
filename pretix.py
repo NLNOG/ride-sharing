@@ -41,3 +41,37 @@ class PretixClient:
             return None
 
         return resp.json()
+
+    async def get_admission_item_ids(self, event: str) -> set[int] | None:
+        """Return the set of item IDs that grant admission to the event.
+
+        Admission items are the primary tickets that represent an attendee;
+        non-admission items (add-ons, donations, merchandise) are excluded.
+        The order API only exposes an item ID per position, so we resolve
+        admission status from the items endpoint.
+
+        Returns None if the items can't be fetched, so callers can fall back to
+        treating every position as an attendee rather than locking anyone out.
+        """
+        url = f"{self.api_url}/organizers/{self.organizer}/events/{event}/items/"
+        params: dict | None = {"admission": "true"}
+        ids: set[int] = set()
+        try:
+            async with httpx.AsyncClient() as client:
+                while url:
+                    resp = await client.get(url, headers=self.headers, params=params)
+                    if resp.status_code != 200:
+                        return None
+                    data = resp.json()
+                    for item in data.get("results", []):
+                        # The `admission` query filter narrows the payload, but
+                        # re-check here so a server that ignores it still yields
+                        # only admission items.
+                        if item.get("admission"):
+                            ids.add(item["id"])
+                    # `next` is a full URL that already carries the query string.
+                    url = data.get("next")
+                    params = None
+        except httpx.HTTPError:
+            return None
+        return ids

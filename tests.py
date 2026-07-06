@@ -213,6 +213,7 @@ async def make_user_client(transport, pretix_mod, email_mod, event_mock, order: 
     client = AsyncClient(transport=transport, base_url="http://test")
     with patch.object(pretix_mod, "verify_order", new_callable=AsyncMock, return_value=order), \
          patch.object(pretix_mod, "get_event", new_callable=AsyncMock, return_value=event_mock), \
+         patch.object(pretix_mod, "get_admission_item_ids", new_callable=AsyncMock, return_value=None), \
          patch.object(email_mod, "send"):
         r = await client.get(
             f"/auth/ev/{order['positions'][0]['attendee_name']}/{order['secret']}",
@@ -532,6 +533,76 @@ async def test_app():
 
 
 # ---------------------------------------------------------------------------
+# Non-admission product tests
+# ---------------------------------------------------------------------------
+
+async def test_non_admission_positions():
+    """Non-admission products (add-ons, donations) must not become attendees."""
+    from main import app, email, engine, pretix
+
+    # test_app() unlinks the shared DB file at its end, leaving the engine with
+    # stale pooled connections; reset to a fresh schema before exercising auth.
+    engine.dispose()
+    if os.path.exists("test_rideshare.db"):
+        os.remove("test_rideshare.db")
+    Base.metadata.create_all(engine)
+
+    event_mock = {"date_from": "2026-09-15T09:00:00+02:00"}
+    transport = ASGITransport(app=app)
+
+    # Item 10 grants admission; item 11 (donation/add-on) does not.
+    admission_ids = {10}
+
+    # One admission ticket + one donation on the same order.
+    single = {
+        "secret": "sec1", "status": "p",
+        "positions": [
+            {"id": 1, "item": 10, "attendee_name": "Real Attendee", "attendee_email": "real@test.com"},
+            {"id": 2, "item": 11, "attendee_name": None, "attendee_email": None},
+        ],
+    }
+
+    with patch.object(pretix, "verify_order", new_callable=AsyncMock, return_value=single), \
+         patch.object(pretix, "get_event", new_callable=AsyncMock, return_value=event_mock), \
+         patch.object(pretix, "get_admission_item_ids", new_callable=AsyncMock, return_value=admission_ids), \
+         patch.object(email, "send"):
+        client = AsyncClient(transport=transport, base_url="http://test")
+        # Only one admission position remains, so we log straight in instead of
+        # showing the attendee picker (which would mean the donation counted).
+        r = await client.get("/auth/ev/CODE/sec1", follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/dashboard", r.headers.get("location")
+        ok("donation position is not treated as an extra attendee")
+        await client.aclose()
+
+    # Two admission tickets + one donation -> picker shows exactly two people.
+    multi = {
+        "secret": "sec2", "status": "p",
+        "positions": [
+            {"id": 1, "item": 10, "attendee_name": "Alice", "attendee_email": "alice@test.com"},
+            {"id": 2, "item": 10, "attendee_name": "Bob", "attendee_email": "bob@test.com"},
+            {"id": 3, "item": 11, "attendee_name": None, "attendee_email": None},
+        ],
+    }
+
+    with patch.object(pretix, "verify_order", new_callable=AsyncMock, return_value=multi), \
+         patch.object(pretix, "get_event", new_callable=AsyncMock, return_value=event_mock), \
+         patch.object(pretix, "get_admission_item_ids", new_callable=AsyncMock, return_value=admission_ids), \
+         patch.object(email, "send"):
+        client = AsyncClient(transport=transport, base_url="http://test")
+        r = await client.get("/auth/ev/CODE/sec2", follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/auth/pick", r.headers.get("location")
+        r = await client.get("/auth/pick")
+        assert r.text.count('name="position_id"') == 2, r.text.count('name="position_id"')
+        assert "Alice" in r.text and "Bob" in r.text
+        ok("attendee picker excludes the donation position")
+        await client.aclose()
+
+    engine.dispose()
+    if os.path.exists("test_rideshare.db"):
+        os.remove("test_rideshare.db")
+
+
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     print("\n=== Model Tests ===")
@@ -542,6 +613,9 @@ if __name__ == "__main__":
 
     print("\n=== Integration Tests ===")
     asyncio.run(test_app())
+
+    print("\n=== Non-Admission Product Tests ===")
+    asyncio.run(test_non_admission_positions())
 
     print("\n=== Direction Tests ===")
     test_directions()
