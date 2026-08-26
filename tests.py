@@ -8,6 +8,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
+import httpx
 from httpx import ASGITransport, AsyncClient, Cookies
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -607,22 +608,22 @@ async def test_non_admission_positions():
 # ---------------------------------------------------------------------------
 
 def test_auth_link_parsing():
-    """Both Pretix link formats resolve to the same structured auth route."""
-    from main import _parse_pretix_link
+    """Both Pretix link formats resolve to a structured auth route."""
+    from main import _parse_pretix_link, _position_by_number
     from pretix import PretixClient
 
     assert _parse_pretix_link(
         "https://pretix.eu/nlnog/nlnogday2026/order/AMBV9/3rpcz29wtm69eblc/"
-    ) == ("nlnogday2026", "AMBV9", "3rpcz29wtm69eblc")
+    ) == ("nlnogday2026", "AMBV9", "", "3rpcz29wtm69eblc")
     assert _parse_pretix_link(
         "https://pretix.eu/nlnog/nlnogday2026/order/AMBV9/3rpcz29wtm69eblc/open/abc123/"
-    ) == ("nlnogday2026", "AMBV9", "3rpcz29wtm69eblc")
+    ) == ("nlnogday2026", "AMBV9", "", "3rpcz29wtm69eblc")
     ok("order links parse")
 
-    # Per-ticket link: the position id sits between the code and the secret.
+    # Ticket link: the position number sits between the code and the secret.
     assert _parse_pretix_link(
         "https://pretix.eu/nlnog/nlnogday2026/ticket/AMBV9/1/3rpcz29wtm69eblc/"
-    ) == ("nlnogday2026", "AMBV9", "3rpcz29wtm69eblc")
+    ) == ("nlnogday2026", "AMBV9", "1", "3rpcz29wtm69eblc")
     ok("ticket links parse")
 
     assert _parse_pretix_link("https://pretix.eu/nlnog/nlnogday2026/order/AMBV9/") is None
@@ -631,20 +632,91 @@ def test_auth_link_parsing():
     assert _parse_pretix_link("") is None
     ok("non-order links are rejected")
 
-    order = {
-        "secret": "ordersecret",
-        "positions": [{"id": 1, "secret": "possecret"}, {"id": 2}],
+    # Ticket links number positions with Pretix's per-order positionid, which is
+    # not the global id we store on an attendee.
+    positions = [{"id": 41, "positionid": 1}, {"id": 42, "positionid": 2}]
+    assert _position_by_number(positions, "2")["id"] == 42
+    assert _position_by_number(positions, "42") is None
+    assert _position_by_number(positions, "") is None
+    ok("ticket position number resolves via positionid")
+
+    # The ticket shop base is derived from the API base unless configured.
+    assert PretixClient("https://pretix.eu/api/v1", "t", "nlnog").presale_url == "https://pretix.eu"
+    assert PretixClient(
+        "https://tickets.example.com/api/v1", "t", "nlnog",
+        presale_url="https://shop.example.com/",
+    ).presale_url == "https://shop.example.com"
+    ok("ticket shop base URL is derived from the API base")
+
+
+async def test_verify_ticket():
+    """A ticket link is validated by the ticket shop, then read from the API."""
+    from pretix import PretixClient
+
+    client = PretixClient("https://pretix.eu/api/v1", "token", "nlnog")
+    order = {"code": "AMBV9", "secret": "ordersecret", "status": "p", "positions": []}
+    requested: list[str] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int, url: str):
+            self.status_code = status_code
+            self.url = httpx.URL(url)
+
+    def fake_shop(status_code: int, final_url: str | None = None):
+        """Patch the shop request; `final_url` fakes a redirect somewhere else."""
+        async def _get(self, url, **kwargs):
+            requested.append(str(url))
+            return FakeResponse(status_code, final_url or str(url))
+        return patch.object(httpx.AsyncClient, "get", _get)
+
+    with fake_shop(200), \
+         patch.object(PretixClient, "get_order", new_callable=AsyncMock, return_value=order):
+        assert await client.verify_ticket("nlnogday2026", "AMBV9", "1", "3rpcz29wtm69eblc") == order
+        assert requested == [
+            "https://pretix.eu/nlnog/nlnogday2026/ticket/AMBV9/1/3rpcz29wtm69eblc/"
+        ], requested
+        ok("valid ticket link verifies against the ticket shop")
+
+    # A wrong secret 404s on the shop, and must never reach the order at all.
+    get_order = AsyncMock(return_value=order)
+    with fake_shop(404), patch.object(PretixClient, "get_order", get_order):
+        assert await client.verify_ticket("nlnogday2026", "AMBV9", "1", "wrongsecret") is None
+        assert get_order.await_count == 0
+        ok("ticket link with a bad secret is rejected")
+
+    # A shop that redirects away (password gate) can answer 200 for any secret.
+    with fake_shop(200, "https://pretix.eu/nlnog/nlnogday2026/unlock/"), \
+         patch.object(PretixClient, "get_order", new_callable=AsyncMock, return_value=order):
+        assert await client.verify_ticket("nlnogday2026", "AMBV9", "1", "anything") is None
+        ok("a 200 from somewhere other than the ticket page is not proof")
+
+    # The secret and position land in a URL path, so both are charset-checked.
+    get_order = AsyncMock(return_value=order)
+    with fake_shop(200), patch.object(PretixClient, "get_order", get_order):
+        assert await client.verify_ticket("nlnogday2026", "AMBV9", "1", "../../evil") is None
+        assert await client.verify_ticket("nlnogday2026", "AMBV9", "..", "secret") is None
+        # Starlette decodes %2F in a path segment, so the code is checked too.
+        assert await client.verify_ticket("nlnogday2026", "../../x", "1", "secret") is None
+        assert await client.verify_ticket("nlnogday2026", "AMBV9", "", "") is None
+        assert get_order.await_count == 0
+        ok("malformed position and secret never reach the shop")
+
+    # The position secret the API does expose is the door barcode, not a
+    # credential: an order link carrying it must not log anyone in.
+    barcode = {
+        "code": "AMBV9", "secret": "ordersecret", "status": "p",
+        "positions": [{"id": 1, "positionid": 1, "secret": "barcodesecret"}],
     }
-    assert PretixClient._secret_matches(order, "ordersecret")
-    assert PretixClient._secret_matches(order, "possecret")
-    assert not PretixClient._secret_matches(order, "nope")
-    assert not PretixClient._secret_matches(order, "")
-    ok("order and position secrets both verify")
+    with patch.object(PretixClient, "get_order", new_callable=AsyncMock, return_value=barcode):
+        assert await client.verify_order("nlnogday2026", "AMBV9", "ordersecret") == barcode
+        assert await client.verify_order("nlnogday2026", "AMBV9", "barcodesecret") is None
+        assert await client.verify_order("nlnogday2026", "AMBV9", "") is None
+        ok("only the order secret authenticates an order link")
 
 
 async def test_auth_link_login():
     """A ticket link logs its own attendee in without showing the picker."""
-    from main import app, email, engine, pretix
+    from main import SessionLocal, app, email, engine, pretix
 
     engine.dispose()
     if os.path.exists("test_rideshare.db"):
@@ -658,24 +730,25 @@ async def test_auth_link_login():
     group = {
         "secret": "ordersecret", "status": "p",
         "positions": [
-            {"id": 1, "secret": "alicepos", "attendee_name": "Alice", "attendee_email": "alice@test.com"},
-            {"id": 2, "secret": "bobpos", "attendee_name": "Bob", "attendee_email": "bob@test.com"},
+            {"id": 41, "positionid": 1, "attendee_name": "Alice", "attendee_email": "alice@test.com"},
+            {"id": 42, "positionid": 2, "attendee_name": "Bob", "attendee_email": "bob@test.com"},
         ],
     }
 
-    with patch.object(pretix, "verify_order", new_callable=AsyncMock, return_value=group), \
+    with patch.object(pretix, "verify_ticket", new_callable=AsyncMock, return_value=group), \
+         patch.object(pretix, "verify_order", new_callable=AsyncMock, return_value=group), \
          patch.object(pretix, "get_event", new_callable=AsyncMock, return_value=event_mock), \
          patch.object(pretix, "get_admission_item_ids", new_callable=AsyncMock, return_value=None), \
          patch.object(email, "send"):
         client = AsyncClient(transport=transport, base_url="http://test")
 
         r = await client.get(
-            "/auth?order=https://pretix.eu/nlnog/ev/ticket/AMBV9/2/bobpos/",
+            "/auth?order=https://pretix.eu/nlnog/ev/ticket/AMBV9/2/bobsecret/",
             follow_redirects=False,
         )
         assert r.status_code == 303
-        assert r.headers["location"] == "/auth/ev/AMBV9/bobpos", r.headers.get("location")
-        ok("/auth redirects a ticket link to the structured route")
+        assert r.headers["location"] == "/auth/ev/AMBV9/2/bobsecret", r.headers.get("location")
+        ok("/auth redirects a ticket link to the ticket auth route")
 
         r = await client.get(r.headers["location"], follow_redirects=False)
         assert r.status_code == 303 and r.headers["location"] == "/dashboard", r.headers.get("location")
@@ -684,12 +757,34 @@ async def test_auth_link_login():
         ok("ticket link logs in its own attendee, skipping the picker")
         await client.aclose()
 
+        # Notification emails are built from the stored secret, so the ticket
+        # login must have stored the order secret, not the link's own.
+        db = SessionLocal()
+        bob = db.query(Attendee).filter_by(pretix_position_id=42).one()
+        assert bob.pretix_order_secret == "ordersecret", bob.pretix_order_secret
+        assert email.auth_url(bob, "/dashboard").startswith(
+            f"{email.base_url}/auth/ev/AMBV9/ordersecret?redirect="
+        ), email.auth_url(bob, "/dashboard")
+        db.close()
+        ok("ticket login stores the order secret for emailed auth links")
+
         # The order link for the same group order still shows the picker.
         picker = AsyncClient(transport=transport, base_url="http://test")
         r = await picker.get("/auth/ev/AMBV9/ordersecret", follow_redirects=False)
         assert r.status_code == 303 and r.headers["location"] == "/auth/pick", r.headers.get("location")
         ok("order link for a group order still shows the picker")
         await picker.aclose()
+
+    # An unverifiable ticket link is turned away.
+    with patch.object(pretix, "verify_ticket", new_callable=AsyncMock, return_value=None), \
+         patch.object(email, "send"):
+        client = AsyncClient(transport=transport, base_url="http://test")
+        r = await client.get("/auth/ev/AMBV9/2/wrongsecret", follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/", r.headers.get("location")
+        r = await client.get("/")
+        assert "Invalid or expired ticket link." in r.text
+        ok("rejected ticket link flashes an error")
+        await client.aclose()
 
     engine.dispose()
     if os.path.exists("test_rideshare.db"):
@@ -713,6 +808,7 @@ if __name__ == "__main__":
 
     print("\n=== Auth Link Tests ===")
     test_auth_link_parsing()
+    asyncio.run(test_verify_ticket())
     asyncio.run(test_auth_link_login())
 
     print("\n=== Direction Tests ===")

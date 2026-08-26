@@ -1,34 +1,29 @@
 from __future__ import annotations
 
+import hmac
+import re
+
 import httpx
+
+# Order codes, secrets and position numbers as they appear in Pretix's own URLs.
+# We build a ticket-shop URL from these, so anything outside the character class
+# is refused rather than pasted into a path.
+_CODE_RE = re.compile(r"^[A-Za-z0-9]+$")
+_SECRET_RE = re.compile(r"^[A-Za-z0-9]+$")
+_POSITION_RE = re.compile(r"^[0-9]+$")
 
 
 class PretixClient:
-    def __init__(self, api_url: str, api_token: str, organizer: str):
+    def __init__(self, api_url: str, api_token: str, organizer: str, presale_url: str = ""):
         self.api_url = api_url.rstrip("/")
         self.organizer = organizer
         self.headers = {"Authorization": f"Token {api_token}"}
+        # The ticket shop lives at the API host minus the API path, unless it is
+        # configured explicitly (self-hosted installs can split the two).
+        self.presale_url = (presale_url or re.sub(r"/api(/v\d+)?/?$", "", self.api_url)).rstrip("/")
 
-    @staticmethod
-    def _secret_matches(order: dict, secret: str) -> bool:
-        """Check `secret` against the order secret and every position secret.
-
-        Order links carry the order secret, per-ticket links carry the secret of
-        one position. Pretix treats both as credentials for the order, so we do
-        too.
-        """
-        if not secret:
-            return False
-        if order.get("secret") == secret:
-            return True
-        return any(p.get("secret") == secret for p in order.get("positions", []))
-
-    async def verify_order(self, event: str, code: str, secret: str) -> dict | None:
-        """Verify an order code and secret against the Pretix API.
-
-        The secret may be the order secret or the secret of one of the order's
-        positions. Returns the order dict if valid, None otherwise.
-        """
+    async def get_order(self, event: str, code: str) -> dict | None:
+        """Fetch an order by code. Performs no secret check of its own."""
         url = f"{self.api_url}/organizers/{self.organizer}/events/{event}/orders/{code}/"
         async with httpx.AsyncClient() as client:
             resp = await client.get(url, headers=self.headers)
@@ -36,12 +31,63 @@ class PretixClient:
         if resp.status_code != 200:
             return None
 
-        order = resp.json()
+        return resp.json()
 
-        if not self._secret_matches(order, secret):
+    async def verify_order(self, event: str, code: str, secret: str) -> dict | None:
+        """Verify an order code and its order secret against the Pretix API.
+
+        Returns the order dict if valid, None otherwise.
+        """
+        order = await self.get_order(event, code)
+        if not order:
+            return None
+
+        if not secret or not hmac.compare_digest(order.get("secret") or "", secret):
             return None
 
         if order.get("status") in ("c", "e"):  # cancelled or expired
+            return None
+
+        return order
+
+    async def verify_ticket(
+        self, event: str, code: str, position: str, secret: str,
+    ) -> dict | None:
+        """Verify a per-ticket link and return the order it belongs to.
+
+        A ticket link (`/ticket/<code>/<position>/<secret>/`) carries a
+        position's `web_secret`, which the REST API never exposes — the position
+        `secret` it does expose is the barcode scanned at the door, a different
+        value that must not be accepted as a login credential. So the ticket shop
+        validates the link for us: it renders the page only for the right
+        secret and 404s otherwise. Order details still come from the API.
+
+        Returns the order dict if the link is valid, None otherwise.
+        """
+        if not (
+            _CODE_RE.match(code or "")
+            and _POSITION_RE.match(position or "")
+            and _SECRET_RE.match(secret or "")
+        ):
+            return None
+
+        path = f"/{self.organizer}/{event}/ticket/{code}/{position}/{secret}/"
+        try:
+            async with httpx.AsyncClient(follow_redirects=True) as client:
+                resp = await client.get(f"{self.presale_url}{path}")
+        except httpx.HTTPError:
+            return None
+
+        # A shop that bounces us elsewhere (event password gate, sign-in page)
+        # can answer 200 for any secret, so only a response still sitting on the
+        # ticket page counts as proof.
+        if resp.status_code != 200:
+            return None
+        if f"/ticket/{code}/{position}/" not in resp.url.path:
+            return None
+
+        order = await self.get_order(event, code)
+        if not order or order.get("status") in ("c", "e"):
             return None
 
         return order

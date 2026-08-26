@@ -33,6 +33,20 @@ https://ride.nlnog.net/auth/<event-slug>/<order-code>/<order-secret>
 
 These can be included in Pretix confirmation emails using placeholder variables.
 
+Attendees can also paste a Pretix link straight into the form on the front page.
+Both shapes Pretix hands out work: the order link
+(`/<organizer>/<event>/order/<code>/<secret>/`) and the per-ticket link
+(`/<organizer>/<event>/ticket/<code>/<position>/<secret>/`), which logs that one
+attendee in directly instead of asking who they are.
+
+A ticket link's secret is the position's `web_secret`, which the Pretix REST API
+does not expose, so it cannot be checked against the API. Those links are
+validated by requesting the ticket page from the shop itself — it renders only
+for the correct secret — and the order details are then read from the API as
+usual. This means the app needs to be able to reach the ticket shop, not just the
+API; set `PRETIX_PRESALE_URL` if the shop does not live at the API URL minus
+`/api/v1`.
+
 ## Configuration
 
 All configuration is via environment variables (or a `.env` file):

@@ -120,6 +120,7 @@ pretix = PretixClient(
     api_url=os.getenv("PRETIX_API_URL", "https://pretix.eu/api/v1"),
     api_token=os.getenv("PRETIX_API_TOKEN", ""),
     organizer=os.getenv("PRETIX_ORGANIZER", ""),
+    presale_url=os.getenv("PRETIX_PRESALE_URL", ""),
 )
 
 email = EmailService()
@@ -181,38 +182,39 @@ def _get_or_create_attendee(
     return attendee
 
 
-def _parse_pretix_link(link: str) -> tuple[str, str, str] | None:
-    """Pull (event, order code, secret) out of a Pretix order or ticket link.
+def _parse_pretix_link(link: str) -> tuple[str, str, str, str] | None:
+    """Pull (event, order code, position, secret) out of a Pretix link.
 
-    Both formats appear in Pretix confirmation emails and both identify the
-    same order:
+    Both formats appear in Pretix confirmation emails:
         https://pretix.eu/<organizer>/<event>/order/<code>/<secret>/[open/<hash>/]
         https://pretix.eu/<organizer>/<event>/ticket/<code>/<position>/<secret>/
 
-    A ticket link carries the secret of a single position instead of the order
-    secret; ``PretixClient.verify_order`` accepts either.
+    An order link covers the whole order and carries the order secret; a ticket
+    link covers one position and carries that position's own secret, so the
+    position number has to travel with it. `position` is "" for order links.
     """
     parts = [p for p in urlparse(link).path.split("/") if p]
     # order:  [organizer, event, "order", code, secret, ...]
     if len(parts) >= 5 and parts[2] == "order":
-        return parts[1], parts[3], parts[4]
+        return parts[1], parts[3], "", parts[4]
     # ticket: [organizer, event, "ticket", code, position, secret, ...]
     if len(parts) >= 6 and parts[2] == "ticket":
-        return parts[1], parts[3], parts[5]
+        return parts[1], parts[3], parts[4], parts[5]
     return None
 
 
-def _position_by_secret(positions: list[dict], secret: str) -> dict | None:
-    """Return the position a per-ticket link points at, if `secret` is one.
+def _position_by_number(positions: list[dict], position: str) -> dict | None:
+    """Return the position a per-ticket link points at, by its number.
 
-    A ticket link already names a single attendee, so there is nothing left to
-    pick even on a group order.
+    Ticket links number positions with Pretix's per-order `positionid`, not the
+    global `id` we store. A ticket link already names a single attendee, so
+    there is nothing left to pick even on a group order.
     """
-    if not secret:
+    if not position:
         return None
-    for position in positions:
-        if position.get("secret") == secret:
-            return position
+    for candidate in positions:
+        if str(candidate.get("positionid", "")) == position:
+            return candidate
     return None
 
 
@@ -295,7 +297,7 @@ def index(request: Request, db: Session = Depends(get_db)):
 @app.get("/auth")
 def auth_by_order_url(request: Request, order: str = ""):
     """Accept a full Pretix link via ?order=... and redirect to the structured
-    auth route.
+    auth route for that link's shape.
     """
     if not order:
         _flash(request, "Paste your Pretix order link to log in.", "error")
@@ -306,17 +308,22 @@ def auth_by_order_url(request: Request, order: str = ""):
         _flash(request, "That doesn't look like a valid Pretix order link.", "error")
         return RedirectResponse(url="/", status_code=303)
 
-    event, code, secret = parsed
-    return RedirectResponse(url=f"/auth/{event}/{code}/{secret}", status_code=303)
+    event, code, position, secret = parsed
+    target = f"/auth/{event}/{code}/{secret}"
+    if position:
+        target = f"/auth/{event}/{code}/{position}/{secret}"
+    return RedirectResponse(url=target, status_code=303)
 
 
-@app.get("/auth/{event}/{code}/{secret}")
-async def auth(
-    event: str, code: str, secret: str, request: Request,
-    redirect: str = "",
-    db: Session = Depends(get_db),
-):
-    order = await pretix.verify_order(event, code, secret)
+async def _login(
+    request: Request, db: Session, event: str, code: str,
+    order: dict | None, position: str, redirect: str,
+) -> RedirectResponse:
+    """Turn a verified order into a session, or ask which attendee it is.
+
+    `position` names one position of the order when the link was a ticket link,
+    and is "" for an order link covering every attendee on it.
+    """
     if not order:
         _flash(request, "Invalid or expired ticket link.", "error")
         return RedirectResponse(url="/", status_code=303)
@@ -334,7 +341,11 @@ async def auth(
 
     target = _safe_redirect_path(redirect)
 
-    chosen = _position_by_secret(positions, secret)
+    # Always store the order secret, whichever link shape got us here: it is the
+    # credential the auth links in our own notification emails are built from.
+    secret = order.get("secret") or ""
+
+    chosen = _position_by_number(positions, position)
     if chosen is None and len(positions) == 1:
         chosen = positions[0]
 
@@ -362,6 +373,27 @@ async def auth(
         "positions": pending_positions,
     }
     return RedirectResponse(url="/auth/pick", status_code=303)
+
+
+@app.get("/auth/{event}/{code}/{secret}")
+async def auth(
+    event: str, code: str, secret: str, request: Request,
+    redirect: str = "",
+    db: Session = Depends(get_db),
+):
+    order = await pretix.verify_order(event, code, secret)
+    return await _login(request, db, event, code, order, "", redirect)
+
+
+@app.get("/auth/{event}/{code}/{position}/{secret}")
+async def auth_ticket(
+    event: str, code: str, position: str, secret: str, request: Request,
+    redirect: str = "",
+    db: Session = Depends(get_db),
+):
+    """Log in from a Pretix per-ticket link, which names a single attendee."""
+    order = await pretix.verify_ticket(event, code, position, secret)
+    return await _login(request, db, event, code, order, position, redirect)
 
 
 @app.get("/auth/pick", response_class=HTMLResponse)
