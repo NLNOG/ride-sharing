@@ -9,10 +9,25 @@ class PretixClient:
         self.organizer = organizer
         self.headers = {"Authorization": f"Token {api_token}"}
 
+    @staticmethod
+    def _secret_matches(order: dict, secret: str) -> bool:
+        """Check `secret` against the order secret and every position secret.
+
+        Order links carry the order secret, per-ticket links carry the secret of
+        one position. Pretix treats both as credentials for the order, so we do
+        too.
+        """
+        if not secret:
+            return False
+        if order.get("secret") == secret:
+            return True
+        return any(p.get("secret") == secret for p in order.get("positions", []))
+
     async def verify_order(self, event: str, code: str, secret: str) -> dict | None:
         """Verify an order code and secret against the Pretix API.
 
-        Returns the order dict if valid, None otherwise.
+        The secret may be the order secret or the secret of one of the order's
+        positions. Returns the order dict if valid, None otherwise.
         """
         url = f"{self.api_url}/organizers/{self.organizer}/events/{event}/orders/{code}/"
         async with httpx.AsyncClient() as client:
@@ -23,7 +38,7 @@ class PretixClient:
 
         order = resp.json()
 
-        if order.get("secret") != secret:
+        if not self._secret_matches(order, secret):
             return None
 
         if order.get("status") in ("c", "e"):  # cancelled or expired

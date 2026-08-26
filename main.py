@@ -181,6 +181,41 @@ def _get_or_create_attendee(
     return attendee
 
 
+def _parse_pretix_link(link: str) -> tuple[str, str, str] | None:
+    """Pull (event, order code, secret) out of a Pretix order or ticket link.
+
+    Both formats appear in Pretix confirmation emails and both identify the
+    same order:
+        https://pretix.eu/<organizer>/<event>/order/<code>/<secret>/[open/<hash>/]
+        https://pretix.eu/<organizer>/<event>/ticket/<code>/<position>/<secret>/
+
+    A ticket link carries the secret of a single position instead of the order
+    secret; ``PretixClient.verify_order`` accepts either.
+    """
+    parts = [p for p in urlparse(link).path.split("/") if p]
+    # order:  [organizer, event, "order", code, secret, ...]
+    if len(parts) >= 5 and parts[2] == "order":
+        return parts[1], parts[3], parts[4]
+    # ticket: [organizer, event, "ticket", code, position, secret, ...]
+    if len(parts) >= 6 and parts[2] == "ticket":
+        return parts[1], parts[3], parts[5]
+    return None
+
+
+def _position_by_secret(positions: list[dict], secret: str) -> dict | None:
+    """Return the position a per-ticket link points at, if `secret` is one.
+
+    A ticket link already names a single attendee, so there is nothing left to
+    pick even on a group order.
+    """
+    if not secret:
+        return None
+    for position in positions:
+        if position.get("secret") == secret:
+            return position
+    return None
+
+
 def _resolve_attendee_fields(position: dict, order: dict) -> tuple[str, str]:
     """Return (name, email) for a position, falling back to order-level email."""
     name = position.get("attendee_name") or "Attendee"
@@ -259,24 +294,19 @@ def index(request: Request, db: Session = Depends(get_db)):
 
 @app.get("/auth")
 def auth_by_order_url(request: Request, order: str = ""):
-    """Accept a full Pretix order URL via ?order=... and redirect to the
-    structured auth route.
-
-    Pretix order URLs look like:
-        https://pretix.eu/<organizer>/<event>/order/<code>/<secret>/[open/<hash>/]
+    """Accept a full Pretix link via ?order=... and redirect to the structured
+    auth route.
     """
     if not order:
         _flash(request, "Paste your Pretix order link to log in.", "error")
         return RedirectResponse(url="/", status_code=303)
 
-    parsed = urlparse(order)
-    parts = [p for p in parsed.path.split("/") if p]
-    # parts: [organizer, event, "order", code, secret, ...]
-    if len(parts) < 5 or parts[2] != "order":
+    parsed = _parse_pretix_link(order)
+    if not parsed:
         _flash(request, "That doesn't look like a valid Pretix order link.", "error")
         return RedirectResponse(url="/", status_code=303)
 
-    event, code, secret = parts[1], parts[3], parts[4]
+    event, code, secret = parsed
     return RedirectResponse(url=f"/auth/{event}/{code}/{secret}", status_code=303)
 
 
@@ -304,10 +334,14 @@ async def auth(
 
     target = _safe_redirect_path(redirect)
 
-    if len(positions) == 1:
-        name, email = _resolve_attendee_fields(positions[0], order)
+    chosen = _position_by_secret(positions, secret)
+    if chosen is None and len(positions) == 1:
+        chosen = positions[0]
+
+    if chosen is not None:
+        name, email = _resolve_attendee_fields(chosen, order)
         attendee = _get_or_create_attendee(
-            db, event, code, secret, positions[0]["id"], name, email,
+            db, event, code, secret, chosen["id"], name, email,
         )
         request.session["attendee_id"] = attendee.id
         request.session["event"] = event

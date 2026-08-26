@@ -603,6 +603,100 @@ async def test_non_admission_positions():
 
 
 # ---------------------------------------------------------------------------
+# Auth link tests
+# ---------------------------------------------------------------------------
+
+def test_auth_link_parsing():
+    """Both Pretix link formats resolve to the same structured auth route."""
+    from main import _parse_pretix_link
+    from pretix import PretixClient
+
+    assert _parse_pretix_link(
+        "https://pretix.eu/nlnog/nlnogday2026/order/AMBV9/3rpcz29wtm69eblc/"
+    ) == ("nlnogday2026", "AMBV9", "3rpcz29wtm69eblc")
+    assert _parse_pretix_link(
+        "https://pretix.eu/nlnog/nlnogday2026/order/AMBV9/3rpcz29wtm69eblc/open/abc123/"
+    ) == ("nlnogday2026", "AMBV9", "3rpcz29wtm69eblc")
+    ok("order links parse")
+
+    # Per-ticket link: the position id sits between the code and the secret.
+    assert _parse_pretix_link(
+        "https://pretix.eu/nlnog/nlnogday2026/ticket/AMBV9/1/3rpcz29wtm69eblc/"
+    ) == ("nlnogday2026", "AMBV9", "3rpcz29wtm69eblc")
+    ok("ticket links parse")
+
+    assert _parse_pretix_link("https://pretix.eu/nlnog/nlnogday2026/order/AMBV9/") is None
+    assert _parse_pretix_link("https://pretix.eu/nlnog/nlnogday2026/ticket/AMBV9/1/") is None
+    assert _parse_pretix_link("https://example.com/hello/") is None
+    assert _parse_pretix_link("") is None
+    ok("non-order links are rejected")
+
+    order = {
+        "secret": "ordersecret",
+        "positions": [{"id": 1, "secret": "possecret"}, {"id": 2}],
+    }
+    assert PretixClient._secret_matches(order, "ordersecret")
+    assert PretixClient._secret_matches(order, "possecret")
+    assert not PretixClient._secret_matches(order, "nope")
+    assert not PretixClient._secret_matches(order, "")
+    ok("order and position secrets both verify")
+
+
+async def test_auth_link_login():
+    """A ticket link logs its own attendee in without showing the picker."""
+    from main import app, email, engine, pretix
+
+    engine.dispose()
+    if os.path.exists("test_rideshare.db"):
+        os.remove("test_rideshare.db")
+    Base.metadata.create_all(engine)
+
+    event_mock = {"date_from": "2026-09-15T09:00:00+02:00"}
+    transport = ASGITransport(app=app)
+
+    # Group order: two attendees, so an order link would show the picker.
+    group = {
+        "secret": "ordersecret", "status": "p",
+        "positions": [
+            {"id": 1, "secret": "alicepos", "attendee_name": "Alice", "attendee_email": "alice@test.com"},
+            {"id": 2, "secret": "bobpos", "attendee_name": "Bob", "attendee_email": "bob@test.com"},
+        ],
+    }
+
+    with patch.object(pretix, "verify_order", new_callable=AsyncMock, return_value=group), \
+         patch.object(pretix, "get_event", new_callable=AsyncMock, return_value=event_mock), \
+         patch.object(pretix, "get_admission_item_ids", new_callable=AsyncMock, return_value=None), \
+         patch.object(email, "send"):
+        client = AsyncClient(transport=transport, base_url="http://test")
+
+        r = await client.get(
+            "/auth?order=https://pretix.eu/nlnog/ev/ticket/AMBV9/2/bobpos/",
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        assert r.headers["location"] == "/auth/ev/AMBV9/bobpos", r.headers.get("location")
+        ok("/auth redirects a ticket link to the structured route")
+
+        r = await client.get(r.headers["location"], follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/dashboard", r.headers.get("location")
+        r = await client.get("/dashboard")
+        assert "Bob" in r.text and "Alice" not in r.text
+        ok("ticket link logs in its own attendee, skipping the picker")
+        await client.aclose()
+
+        # The order link for the same group order still shows the picker.
+        picker = AsyncClient(transport=transport, base_url="http://test")
+        r = await picker.get("/auth/ev/AMBV9/ordersecret", follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/auth/pick", r.headers.get("location")
+        ok("order link for a group order still shows the picker")
+        await picker.aclose()
+
+    engine.dispose()
+    if os.path.exists("test_rideshare.db"):
+        os.remove("test_rideshare.db")
+
+
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     print("\n=== Model Tests ===")
@@ -616,6 +710,10 @@ if __name__ == "__main__":
 
     print("\n=== Non-Admission Product Tests ===")
     asyncio.run(test_non_admission_positions())
+
+    print("\n=== Auth Link Tests ===")
+    test_auth_link_parsing()
+    asyncio.run(test_auth_link_login())
 
     print("\n=== Direction Tests ===")
     test_directions()
